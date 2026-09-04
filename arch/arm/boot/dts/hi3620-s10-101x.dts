@@ -32,6 +32,25 @@
 	};
 
 	/*
+	 * Keep the final 1 MiB of the stock-confirmed RAM range untouched by
+	 * Linux and use it as a persistent ramoops console/oops buffer.  A
+	 * matching debug recovery is limited to 845 MiB so it does not overwrite
+	 * this region before we can retrieve it after a failed boot.
+	 */
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		ramoops@34d00000 {
+			compatible = "ramoops";
+			reg = <0x34d00000 0x00100000>;
+			record-size = <0x00040000>;
+			console-size = <0x00080000>;
+		};
+	};
+
+	/*
 	 * Hi3620 has a second clock provider for the DW-MMC card-interface
 	 * clocks.  It uses timing registers in the same system-controller
 	 * register block as the main clock controller.
