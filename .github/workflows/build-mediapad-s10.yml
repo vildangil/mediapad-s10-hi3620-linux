@@ -54,13 +54,16 @@ jobs:
             scripts/dtc/dtc-lexer.l \
             scripts/dtc/dtc-lexer.lex.c_shipped
 
-          # Old ARM assembly used `#alloc` as the ELF section flag. Modern
-          # GNU as treats `#` as the start of an ARM comment and rejects the
-          # line. Newer kernels use the equivalent string flag "a".
+          # Old ARM assembly used `#alloc` / `#execinstr` ELF section flags.
+          # Modern GNU as treats `#` as the start of an ARM comment and
+          # rejects these directives. Use the equivalent quoted flags.
           sed -i 's/\.section "\.proc\.info\.init", #alloc/.section ".proc.info.init", "a"/' \
             arch/arm/mm/proc-v7.S
+          sed -i 's/\.section "\.start", #alloc, #execinstr/.section ".start", "ax"/' \
+            arch/arm/boot/compressed/head.S
 
           grep -n '\.proc\.info\.init' arch/arm/mm/proc-v7.S
+          grep -n '\.section "\.start"' arch/arm/boot/compressed/head.S
 
       - name: Configure MediaPad Hi3620 kernel
         run: |
