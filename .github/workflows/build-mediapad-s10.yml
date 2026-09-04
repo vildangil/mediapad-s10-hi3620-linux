@@ -2,6 +2,12 @@ name: Build MediaPad S10 Hi3620 kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version, e.g. 0.1.1 (leave empty for build only)'
+        required: false
+        default: ''
+        type: string
   push:
     branches:
       - mediapad-s10-hi3620
@@ -16,6 +22,9 @@ on:
       - 'scripts/**'
       - 'Makefile'
       - '.github/workflows/build-mediapad-s10.yml'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -35,7 +44,7 @@ jobs:
           sudo apt-get install -y \
             gcc-arm-linux-gnueabi \
             binutils-arm-linux-gnueabi \
-            bc bison flex libssl-dev make
+            bc bison flex libssl-dev make zip unzip
 
           ${CROSS_COMPILE}gcc --version
           ${CROSS_COMPILE}as --version | head -n 1
@@ -106,6 +115,7 @@ jobs:
           cp out/arch/arm/boot/dts/hi3620-s10-101x.dtb artifacts/hi3620-s10-101x.dtb
           cat artifacts/zImage artifacts/hi3620-s10-101x.dtb > artifacts/zImage-dtb
           cp out/.config artifacts/kernel.config
+          make -s O=out kernelrelease > artifacts/kernel.release
           sha256sum artifacts/* | tee artifacts/SHA256SUMS
 
       - name: Upload kernel artifacts
@@ -115,3 +125,31 @@ jobs:
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Create release archive
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version != '' }}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euxo pipefail
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $RELEASE_VERSION" >&2
+            exit 2
+          fi
+
+          (cd artifacts && zip -9 -r ../kernel.zip .)
+          unzip -l kernel.zip
+          sha256sum kernel.zip
+
+      - name: Publish GitHub release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_version }}
+          target_commitish: ${{ github.sha }}
+          name: Linux Kernel for Huawei MediaPad 10 FHD ${{ inputs.release_version }}
+          generate_release_notes: true
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: kernel.zip
