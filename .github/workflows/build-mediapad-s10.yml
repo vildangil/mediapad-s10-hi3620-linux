@@ -40,7 +40,7 @@ jobs:
           ${CROSS_COMPILE}gcc --version
           ${CROSS_COMPILE}as --version | head -n 1
 
-      - name: Fix legacy DTC for modern host GCC
+      - name: Fix legacy build syntax for modern toolchains
         run: |
           # Linux 4.9's bundled DTC defines yylloc in both the lexer and
           # parser. GCC 10+ defaults to -fno-common, so the host linker
@@ -53,6 +53,14 @@ jobs:
           grep -n 'YYLTYPE yylloc' \
             scripts/dtc/dtc-lexer.l \
             scripts/dtc/dtc-lexer.lex.c_shipped
+
+          # Old ARM assembly used `#alloc` as the ELF section flag. Modern
+          # GNU as treats `#` as the start of an ARM comment and rejects the
+          # line. Newer kernels use the equivalent string flag "a".
+          sed -i 's/\.section "\.proc\.info\.init", #alloc/.section ".proc.info.init", "a"/' \
+            arch/arm/mm/proc-v7.S
+
+          grep -n '\.proc\.info\.init' arch/arm/mm/proc-v7.S
 
       - name: Configure kernel
         run: |
