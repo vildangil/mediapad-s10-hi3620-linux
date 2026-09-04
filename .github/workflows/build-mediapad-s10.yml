@@ -61,9 +61,12 @@ jobs:
             arch/arm/mm/proc-v7.S
           sed -i 's/\.section "\.start", #alloc, #execinstr/.section ".start", "ax"/' \
             arch/arm/boot/compressed/head.S
+          sed -i 's/\.section \.piggydata,#alloc/.section .piggydata,"a"/' \
+            arch/arm/boot/compressed/piggy.S
 
           grep -n '\.proc\.info\.init' arch/arm/mm/proc-v7.S
           grep -n '\.section "\.start"' arch/arm/boot/compressed/head.S
+          grep -n '\.piggydata' arch/arm/boot/compressed/piggy.S
 
       - name: Configure MediaPad Hi3620 kernel
         run: |
