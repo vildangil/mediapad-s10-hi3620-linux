@@ -1,0 +1,80 @@
+name: Build MediaPad S10 Hi3620 kernel
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - mediapad-s10-hi3620
+    paths:
+      - 'arch/arm/**'
+      - 'drivers/**'
+      - 'include/**'
+      - 'kernel/**'
+      - 'init/**'
+      - 'mm/**'
+      - 'fs/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - '.github/workflows/build-mediapad-s10.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ARM cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabihf \
+            binutils-arm-linux-gnueabihf \
+            bc bison flex libssl-dev make
+
+      - name: Configure kernel
+        run: |
+          mkdir -p out
+          make O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+
+          # Old Huawei bootloaders commonly need an appended DTB and may
+          # still pass ATAGS.  Keep both compatibility paths enabled.
+          scripts/config --file out/.config \
+            --enable ARCH_HISI \
+            --enable ARCH_HI3xxx \
+            --enable ARM_APPENDED_DTB \
+            --enable ARM_ATAG_DTB_COMPAT \
+            --enable BLK_DEV_INITRD \
+            --enable DEVTMPFS \
+            --enable DEVTMPFS_MOUNT \
+            --enable SERIAL_AMBA_PL011 \
+            --enable SERIAL_AMBA_PL011_CONSOLE
+
+          make O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
+
+      - name: Build zImage and MediaPad DTB
+        run: |
+          make -j"$(nproc)" O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- zImage
+
+          # Build this DTB explicitly so bring-up does not depend on the
+          # generic DTB list while the board support is still experimental.
+          make -j"$(nproc)" O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+            arch/arm/boot/dts/hi3620-s10-101x.dtb
+
+      - name: Create appended-DTB kernel
+        run: |
+          mkdir -p artifacts
+          cp out/arch/arm/boot/zImage artifacts/zImage
+          cp out/arch/arm/boot/dts/hi3620-s10-101x.dtb artifacts/hi3620-s10-101x.dtb
+          cat artifacts/zImage artifacts/hi3620-s10-101x.dtb > artifacts/zImage-dtb
+          cp out/.config artifacts/kernel.config
+          sha256sum artifacts/* | tee artifacts/SHA256SUMS
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mediapad-s10-hi3620-kernel-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
