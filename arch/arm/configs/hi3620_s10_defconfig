@@ -44,6 +44,12 @@ CONFIG_EXT4_FS=y
 CONFIG_TMPFS=y
 CONFIG_TMPFS_POSIX_ACL=y
 
+# Persistent early-boot logging. The board DTS reserves the final 1 MiB of
+# known-good System RAM for ramoops so a failed boot can be inspected later.
+CONFIG_PSTORE=y
+CONFIG_PSTORE_CONSOLE=y
+CONFIG_PSTORE_RAM=y
+
 CONFIG_DEBUG_KERNEL=y
 CONFIG_DEBUG_LL=y
 CONFIG_DEBUG_HI3620_UART=y
