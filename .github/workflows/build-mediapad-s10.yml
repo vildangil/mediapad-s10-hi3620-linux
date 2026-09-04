@@ -95,9 +95,9 @@ jobs:
         run: |
           make -j"$(nproc)" O=out zImage
 
-          # Build this DTB explicitly so bring-up does not depend on the
-          # generic DTB list while the board support is still experimental.
-          make -j"$(nproc)" O=out arch/arm/boot/dts/hi3620-s10-101x.dtb
+          # The ARM makefiles automatically prepend arch/arm/boot/dts/ to
+          # a .dtb target, so pass only the DTB filename here.
+          make -j"$(nproc)" O=out hi3620-s10-101x.dtb
 
       - name: Create appended-DTB kernel
         run: |
