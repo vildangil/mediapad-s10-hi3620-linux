@@ -2,11 +2,6 @@
  * Huawei MediaPad 10 FHD S10-101x
  *
  * Initial Linux bring-up device tree for the HiSilicon Hi3620 (K3V2).
- *
- * This is intentionally minimal.  The first milestone is to get a modern
- * kernel through early boot and into an initramfs with useful serial logs.
- * Device-specific MMC, display, touch, Wi-Fi, PMIC and audio nodes should be
- * added only after the base platform is proven on real hardware.
  */
 
 /dts-v1/;
@@ -34,6 +29,67 @@
 	memory@0 {
 		device_type = "memory";
 		reg = <0x00000000 0x34e00000>;
+	};
+
+	/*
+	 * Hi3620 has a second clock provider for the DW-MMC card-interface
+	 * clocks.  It uses timing registers in the same system-controller
+	 * register block as the main clock controller.
+	 */
+	mmc_clock: mmc-clock@fc802000 {
+		compatible = "hisilicon,hi3620-mmc-clock";
+		reg = <0xfc802000 0x1000>;
+		#clock-cells = <1>;
+	};
+
+	/*
+	 * Stock Huawei kernel reports hi_mci.0 at 0xfcd03000 / Linux IRQ 48.
+	 * GIC SPI 16 maps to IRQ 48, exactly matching the upstream Hi3620
+	 * K3 DW-MSHC binding.  Avoid guessing the card-detect GPIO for now and
+	 * let the core poll the removable slot.
+	 */
+	sd_mmc: mmc@fcd03000 {
+		compatible = "hisilicon,hi4511-dw-mshc";
+		reg = <0xfcd03000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 16 4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		clocks = <&mmc_clock HI3620_SD_CIUCLK>,
+			 <&clock HI3620_DDRC_PER_CLK>;
+		clock-names = "ciu", "biu";
+		num-slots = <1>;
+		fifo-depth = <0x100>;
+		bus-width = <4>;
+		broken-cd;
+		disable-wp;
+		cap-sd-highspeed;
+		status = "okay";
+	};
+
+	/*
+	 * Stock hi_mci.1 is the internal eMMC controller at 0xfcd04000 /
+	 * Linux IRQ 49, therefore GIC SPI 17.  Keep the bootloader-established
+	 * power and pin state for the first test; PMIC/regulator support can be
+	 * described once basic block I/O is proven.
+	 */
+	emmc: mmc@fcd04000 {
+		compatible = "hisilicon,hi4511-dw-mshc";
+		reg = <0xfcd04000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 17 4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		clocks = <&mmc_clock HI3620_MMC_CIUCLK1>,
+			 <&clock HI3620_DDRC_PER_CLK>;
+		clock-names = "ciu", "biu";
+		num-slots = <1>;
+		fifo-depth = <0x100>;
+		bus-width = <8>;
+		non-removable;
+		disable-wp;
+		cap-mmc-highspeed;
+		status = "okay";
 	};
 };
 
