@@ -62,31 +62,28 @@ jobs:
 
           grep -n '\.proc\.info\.init' arch/arm/mm/proc-v7.S
 
-      - name: Configure kernel
+      - name: Configure MediaPad Hi3620 kernel
         run: |
           mkdir -p out
-          make O=out multi_v7_defconfig
-
-          # Old Huawei bootloaders commonly need an appended DTB and may
-          # still pass ATAGS. Keep both compatibility paths enabled.
-          scripts/config --file out/.config \
-            --enable ARCH_HISI \
-            --enable ARCH_HI3xxx \
-            --enable ARM_APPENDED_DTB \
-            --enable ARM_ATAG_DTB_COMPAT \
-            --enable BLK_DEV_INITRD \
-            --enable DEVTMPFS \
-            --enable DEVTMPFS_MOUNT \
-            --enable SERIAL_AMBA_PL011 \
-            --enable SERIAL_AMBA_PL011_CONSOLE
-
+          make O=out hi3620_s10_defconfig
           make O=out olddefconfig
 
-          # Fail early if Kconfig somehow stopped selecting ARMv7-A.
+          # Sanity checks: this build must stay on the Hi3620-only path and
+          # keep the compatibility/debug options needed for first boot.
           grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
+          grep -q '^CONFIG_ARCH_HISI=y$' out/.config
+          grep -q '^CONFIG_ARCH_HI3xxx=y$' out/.config
           grep -q '^CONFIG_CPU_V7=y$' out/.config
           grep -q '^CONFIG_CPU_32v7=y$' out/.config
-          grep -E '^CONFIG_(ARCH_MULTI_V7|CPU_V7|CPU_32v7|ARCH_HI3xxx)=' out/.config
+          grep -q '^CONFIG_SMP=y$' out/.config
+          grep -q '^CONFIG_NR_CPUS=4$' out/.config
+          grep -q '^CONFIG_ARM_APPENDED_DTB=y$' out/.config
+          grep -q '^CONFIG_ARM_ATAG_DTB_COMPAT=y$' out/.config
+          grep -q '^CONFIG_SERIAL_AMBA_PL011=y$' out/.config
+          grep -q '^CONFIG_SERIAL_AMBA_PL011_CONSOLE=y$' out/.config
+          grep -q '^CONFIG_DEBUG_HI3620_UART=y$' out/.config
+
+          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART)=' out/.config
 
       - name: Build zImage and MediaPad DTB
         run: |
