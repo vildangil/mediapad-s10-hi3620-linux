@@ -21,6 +21,10 @@ jobs:
   build:
     runs-on: ubuntu-24.04
 
+    env:
+      ARCH: arm
+      CROSS_COMPILE: arm-linux-gnueabi-
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,9 +33,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            gcc-arm-linux-gnueabihf \
-            binutils-arm-linux-gnueabihf \
+            gcc-arm-linux-gnueabi \
+            binutils-arm-linux-gnueabi \
             bc bison flex libssl-dev make
+
+          ${CROSS_COMPILE}gcc --version
+          ${CROSS_COMPILE}as --version | head -n 1
 
       - name: Fix legacy DTC for modern host GCC
         run: |
@@ -50,7 +57,7 @@ jobs:
       - name: Configure kernel
         run: |
           mkdir -p out
-          make O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
+          make O=out multi_v7_defconfig
 
           # Old Huawei bootloaders commonly need an appended DTB and may
           # still pass ATAGS. Keep both compatibility paths enabled.
@@ -65,16 +72,21 @@ jobs:
             --enable SERIAL_AMBA_PL011 \
             --enable SERIAL_AMBA_PL011_CONSOLE
 
-          make O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
+          make O=out olddefconfig
+
+          # Fail early if Kconfig somehow stopped selecting ARMv7-A.
+          grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
+          grep -q '^CONFIG_CPU_V7=y$' out/.config
+          grep -q '^CONFIG_CPU_32v7=y$' out/.config
+          grep -E '^CONFIG_(ARCH_MULTI_V7|CPU_V7|CPU_32v7|ARCH_HI3xxx)=' out/.config
 
       - name: Build zImage and MediaPad DTB
         run: |
-          make -j"$(nproc)" O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- zImage
+          make -j"$(nproc)" O=out zImage
 
           # Build this DTB explicitly so bring-up does not depend on the
           # generic DTB list while the board support is still experimental.
-          make -j"$(nproc)" O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
-            arch/arm/boot/dts/hi3620-s10-101x.dtb
+          make -j"$(nproc)" O=out arch/arm/boot/dts/hi3620-s10-101x.dtb
 
       - name: Create appended-DTB kernel
         run: |
