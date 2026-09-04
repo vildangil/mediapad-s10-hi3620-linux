@@ -33,13 +33,27 @@ jobs:
             binutils-arm-linux-gnueabihf \
             bc bison flex libssl-dev make
 
+      - name: Fix legacy DTC for modern host GCC
+        run: |
+          # Linux 4.9's bundled DTC defines yylloc in both the lexer and
+          # parser. GCC 10+ defaults to -fno-common, so the host linker
+          # rejects the duplicate symbol. Keep the parser definition and
+          # make the lexer declaration extern, matching newer kernels.
+          sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
+            scripts/dtc/dtc-lexer.l \
+            scripts/dtc/dtc-lexer.lex.c_shipped
+
+          grep -n 'YYLTYPE yylloc' \
+            scripts/dtc/dtc-lexer.l \
+            scripts/dtc/dtc-lexer.lex.c_shipped
+
       - name: Configure kernel
         run: |
           mkdir -p out
           make O=out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- multi_v7_defconfig
 
           # Old Huawei bootloaders commonly need an appended DTB and may
-          # still pass ATAGS.  Keep both compatibility paths enabled.
+          # still pass ATAGS. Keep both compatibility paths enabled.
           scripts/config --file out/.config \
             --enable ARCH_HISI \
             --enable ARCH_HI3xxx \
