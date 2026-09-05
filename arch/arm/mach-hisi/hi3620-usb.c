@@ -84,7 +84,7 @@ static int __init hi3620_mediapad_usb_prepare(void)
 
 	/* The stock driver enables the USB rails before this point.  Regulators
 	 * are not described yet in the upstream Hi3620 DT, so retain the rails
-	 * left by the bootloader and reproduce only the reset/clock/PHY sequence.
+	 * left by the bootloader and reproduce the reset/clock/PHY sequence.
 	 */
 	udelay(200);
 
@@ -107,7 +107,18 @@ static int __init hi3620_mediapad_usb_prepare(void)
 	val |= (0x6 << 17);
 	writel(val, pctrl + PCTRL_PERI_CTRL16);
 
-	/* Keep PERI_CTRL17's bootloader board-specific tune value. */
+	/*
+	 * The vendor driver does not leave PERI_CTRL17 untouched.  For the
+	 * K3OEM/MediaPad platform configuration usbphy_type is 0
+	 * (E_USBPHY_TUNE_PLATFORM), which means low six bits are replaced by
+	 * 0x23.  The previous bring-up kept the bootloader value (low bits 0x0d),
+	 * enough for DWC2 register access but apparently not enough for a host to
+	 * observe the device pull-up.  Reproduce Huawei's platform tune exactly.
+	 */
+	val = readl(pctrl + PCTRL_PERI_CTRL17);
+	val &= ~0x3f;
+	val |= 0x23;
+	writel(val, pctrl + PCTRL_PERI_CTRL17);
 
 	val = readl(pctrl + PCTRL_PERI_CTRL21);
 	val &= ~((0x3 << 1) | (0x3 << 8) | (0x3 << 10));
