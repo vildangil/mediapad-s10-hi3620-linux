@@ -33,13 +33,11 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_BLK_DEV_RAM=y
 CONFIG_BLK_DEV_RAM_SIZE=65536
 
-# postmarketOS initramfs/rootfs expects socket and netlink support even before
-# any real network device is available.  Without CONFIG_NET, udevd cannot
-# create its control/netlink sockets and exits with ENOSYS.
+# postmarketOS initramfs/rootfs needs the networking core for netlink and
+# AF_UNIX control sockets used by udevd. Keep IP/packet networking out of the
+# tiny bring-up kernel for now so the legacy 8 MiB boot partition still fits.
 CONFIG_NET=y
 CONFIG_UNIX=y
-CONFIG_PACKET=y
-CONFIG_INET=y
 
 CONFIG_SERIAL_AMBA_PL011=y
 CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
