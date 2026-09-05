@@ -48,12 +48,15 @@
 #define RST_USB2DVC_PHY                BIT(28)
 #define RST_USB2DVC                    BIT(17)
 
+int __init hi3620_mediapad_touch_reset(void);
+
 static int __init hi3620_mediapad_usb_prepare(void)
 {
 	void __iomem *sctrl;
 	void __iomem *pctrl;
 	void __iomem *usb;
 	u32 val;
+	int ret;
 
 	if (!of_machine_is_compatible("huawei,s10-101x"))
 		return 0;
@@ -141,6 +144,15 @@ static int __init hi3620_mediapad_usb_prepare(void)
 	iounmap(usb);
 	iounmap(pctrl);
 	iounmap(sctrl);
+
+	/* The same stock board file also pulses the Synaptics RMI4 reset line.
+	 * Do it from this already-proven early board initcall so the touchscreen
+	 * is awake before DesignWare I2C/RMI4 device probing begins.
+	 */
+	ret = hi3620_mediapad_touch_reset();
+	if (ret)
+		pr_warn("HI3620-TOUCH: reset helper returned %d\n", ret);
+
 	return 0;
 }
 arch_initcall(hi3620_mediapad_usb_prepare);
