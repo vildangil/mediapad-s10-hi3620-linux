@@ -7,6 +7,10 @@
  * RMI4 I2C transport has no reset-gpio DT support, so reproduce just that
  * board-level pulse early enough that the normal upstream RMI4 driver can be
  * used unchanged.
+ *
+ * This helper is called from hi3620-usb.c's already-proven arch_initcall.
+ * Keeping a single initcall also avoids a legacy build quirk seen when this
+ * translation unit declared its own arch_initcall.
  */
 
 #include <linux/bitops.h>
@@ -24,7 +28,7 @@
 #define TOUCH_RESET_PIN		4
 #define TOUCH_ATTN_PIN		5
 
-static int __init hi3620_mediapad_touch_reset(void)
+int __init hi3620_mediapad_touch_reset(void)
 {
 	struct device_node *np;
 	struct clk *clk = NULL;
@@ -87,4 +91,3 @@ static int __init hi3620_mediapad_touch_reset(void)
 	of_node_put(np);
 	return 0;
 }
-arch_initcall(hi3620_mediapad_touch_reset);
