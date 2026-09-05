@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Minimal Hi3620 USB2DVC/PicoPHY bring-up for the MediaPad 10 FHD.
- *
- * The generic DWC2 driver can handle the Synopsys core once it is clocked
- * and released from reset, but Huawei's boot flow also requires a small SoC
- * specific PicoPHY sequence.  This is intentionally limited to the register
- * programming performed by the stock K3V2 USB glue; the Android gadget stack
- * is not carried over.
+ * Minimal Hi3620 USB2DVC/PicoPHY and touchscreen bring-up for the
+ * Huawei MediaPad 10 FHD.
  */
 
 #include <linux/bitops.h>
@@ -21,6 +16,7 @@
 #define HI3620_SCTRL_PHYS              0xfc802000
 #define HI3620_PCTRL_PHYS              0xfca09000
 #define HI3620_USB2DVC_PHYS            0xfd240000
+#define HI3620_GPIO19_PHYS             0xfc819000
 
 #define HI3620_MAP_SIZE                0x1000
 
@@ -49,6 +45,12 @@
 #define USB_DSTS                       0x808
 #define USB_DCTL_SFTDISCON             BIT(1)
 
+/* ARM PL061 register addressing.  GPIO156/157 are GPIO19 pins 4/5. */
+#define PL061_GPIODIR                  0x400
+#define PL061_DATA(pin)                (BIT(pin) << 2)
+#define TOUCH_RESET_PIN                4
+#define TOUCH_ATTN_PIN                 5
+
 #define CLK_USBPICOPHY                 BIT(24)
 #define CLK_USB2DVC                    BIT(17)
 #define RST_PICOPHY                    BIT(24)
@@ -63,12 +65,46 @@ static DECLARE_DELAYED_WORK(hi3620_usb_watch_work,
 			    hi3620_mediapad_usb_watch);
 
 /*
+ * The vendor board code explicitly drives GPIO156 low, waits, then releases it
+ * high before registering the Synaptics RMI4 device.  The upstream 4.9 RMI4
+ * I2C transport has no reset-gpio handling.  Do the same pulse here, before
+ * the I2C/RMI drivers probe.  These two pads are dedicated GPIOs in Huawei's
+ * iomux database, so no IOMG selector needs to be changed.
+ */
+static void __init hi3620_mediapad_touch_reset(void)
+{
+	void __iomem *gpio;
+	u8 dir;
+	u8 attn;
+
+	gpio = ioremap(HI3620_GPIO19_PHYS, HI3620_MAP_SIZE);
+	if (!gpio) {
+		pr_err("HI3620-TOUCH: failed to map GPIO19\n");
+		return;
+	}
+
+	dir = readb(gpio + PL061_GPIODIR);
+	writeb(dir | BIT(TOUCH_RESET_PIN), gpio + PL061_GPIODIR);
+
+	/* Active-low reset: low for 10 ms, then high and wait for firmware. */
+	writeb(0, gpio + PL061_DATA(TOUCH_RESET_PIN));
+	msleep(10);
+	writeb(BIT(TOUCH_RESET_PIN), gpio + PL061_DATA(TOUCH_RESET_PIN));
+	msleep(100);
+
+	attn = readb(gpio + PL061_DATA(TOUCH_ATTN_PIN));
+	pr_info("HI3620-TOUCH: GPIO156 reset pulse complete; GPIO157(attn)=%u dir=%02x\n",
+		!!(attn & BIT(TOUCH_ATTN_PIN)),
+		readb(gpio + PL061_GPIODIR));
+
+	iounmap(gpio);
+}
+
+/*
  * During bring-up, sample the device-side state after configfs has had enough
- * time to bind its gadget.  A previous kernel registered the UDC and created
- * usb0 but Windows never observed a physical USB connection.  If the legacy
- * DWC2 gadget path has accidentally left SoftDisconnect asserted, clear it
- * once here.  This deliberately runs long after probe/configfs setup and is
- * only enabled on the MediaPad compatible.
+ * time to bind its gadget. If the legacy DWC2 gadget path has accidentally
+ * left SoftDisconnect asserted, clear it once here. Subsequent samples make
+ * a physical-enumeration failure visible in ramoops.
  */
 static void hi3620_mediapad_usb_watch(struct work_struct *work)
 {
@@ -141,10 +177,6 @@ static int __init hi3620_mediapad_usb_prepare(void)
 		readl(pctrl + PCTRL_PERI_CTRL21),
 		readl(usb + USB_GSNPSID));
 
-	/* The stock driver enables the USB rails before this point. Regulators
-	 * are not described yet in the upstream Hi3620 DT, so retain the rails
-	 * left by the bootloader and reproduce the reset/clock/PHY sequence.
-	 */
 	udelay(200);
 
 	/* Hold DWC2 core, its interface PHY and PicoPHY in reset. */
@@ -166,12 +198,7 @@ static int __init hi3620_mediapad_usb_prepare(void)
 	val |= (0x6 << 17);
 	writel(val, pctrl + PCTRL_PERI_CTRL16);
 
-	/*
-	 * Huawei's K3OEM configuration selects E_USBPHY_TUNE_PLATFORM (0).
-	 * The stock setup_dvc_and_phy() therefore replaces PERI_CTRL17[5:0]
-	 * with 0x23.  Keeping the bootloader value was enough for register
-	 * access but not for reliable host-side enumeration, so mirror stock.
-	 */
+	/* K3OEM/MediaPad stock tune: E_USBPHY_TUNE_PLATFORM == 0. */
 	val = readl(pctrl + PCTRL_PERI_CTRL17);
 	val &= ~0x3f;
 	val |= 0x23;
@@ -210,8 +237,11 @@ static int __init hi3620_mediapad_usb_prepare(void)
 	iounmap(pctrl);
 	iounmap(sctrl);
 
-	/* First sample/pull-up recovery runs around the time OpenRC reaches
-	 * its default runlevel; subsequent samples capture later failures.
+	/* Wake the Synaptics before DesignWare I2C/RMI4 device probing. */
+	hi3620_mediapad_touch_reset();
+
+	/* First USB sample/pull-up recovery around OpenRC default; subsequent
+	 * samples capture later failures in ramoops.
 	 */
 	schedule_delayed_work(&hi3620_usb_watch_work, 45 * HZ);
 
