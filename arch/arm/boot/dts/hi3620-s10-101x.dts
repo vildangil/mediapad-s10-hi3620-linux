@@ -69,10 +69,11 @@
 	 * Stock board code places the Synaptics RMI4 touchscreen on I2C2.
 	 * Hi3620 I2C2 is a Synopsys DesignWare master at 0xfcb0c000, GIC SPI
 	 * 62. The stock touchscreen uses address 0x70 and attention on GPIO157
-	 * (GPIO19 pin 5, active low). GPIO156/157 are dedicated GPIO pins in
-	 * Huawei's iomux database (no IOMG selector), so keep the bootloader's
-	 * reset/pad state for this probe and use PL061 only for the interrupt.
-	 * Probe at 100 kHz first for maximum signal margin.
+	 * (GPIO19 pin 5, active low). GPIO156 is reset.
+	 *
+	 * Huawei's iomux table identifies IOMG26/IOMG27 (offsets 0x68/0x6c)
+	 * function 0 as I2C2_SCL/I2C2_SDA.  Do not depend on the bootloader to
+	 * leave those pads muxed to I2C: explicitly select them here.
 	 */
 	i2c2: i2c@fcb0c000 {
 		compatible = "snps,designware-i2c";
@@ -81,6 +82,8 @@
 		interrupts = <0 62 4>;
 		clocks = <&clock HI3620_I2CCLK2>;
 		clock-frequency = <100000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c2_pins>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 		status = "okay";
@@ -162,6 +165,18 @@
 		disable-wp;
 		cap-mmc-highspeed;
 		status = "okay";
+	};
+};
+
+/* Explicit stock I2C2 pad mux.  IOMG26/IOMG27 are at 0x68/0x6c in pmx0;
+ * function 0 selects I2C2 SCL/SDA on the production K3V2 silicon.
+ */
+&pmx0 {
+	i2c2_pins: i2c2-pins {
+		pinctrl-single,pins = <
+			0x068 0x0
+			0x06c 0x0
+		>;
 	};
 };
 
