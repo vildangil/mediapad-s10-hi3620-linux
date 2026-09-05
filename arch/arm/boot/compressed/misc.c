@@ -27,6 +27,27 @@ extern void error(char *x);
 
 #include CONFIG_UNCOMPRESS_INCLUDE
 
+/*
+ * MediaPad S10 bring-up breadcrumbs.
+ *
+ * The first 4 KiB below 512 MiB is reserved by the board DT specifically
+ * for these markers.  The zImage decompressor runs before the normal kernel
+ * MMU mappings exist, so the address below is a physical pointer here.
+ * A 511 MiB debug recovery never allocates this page and can retrieve it
+ * after a failed boot.
+ */
+#define HI3620_BOOTTRACE_PHYS	0x1ff00000UL
+
+static inline void hi3620_decomp_trace(unsigned int slot, unsigned int value)
+{
+	volatile unsigned int *trace =
+		(volatile unsigned int *)HI3620_BOOTTRACE_PHYS;
+
+	trace[0] = 0x43525442; /* "BTRC" in little endian memory. */
+	trace[slot] = value;
+	asm volatile("dsb sy" : : : "memory");
+}
+
 #ifdef CONFIG_DEBUG_ICEDCC
 
 #if defined(CONFIG_CPU_V6) || defined(CONFIG_CPU_V6K) || defined(CONFIG_CPU_V7)
@@ -149,6 +170,7 @@ decompress_kernel(unsigned long output_start, unsigned long free_mem_ptr_p,
 {
 	int ret;
 
+	hi3620_decomp_trace(1, 0xd001d001);
 	__stack_chk_guard_setup();
 
 	output_data		= (unsigned char *)output_start;
@@ -157,6 +179,7 @@ decompress_kernel(unsigned long output_start, unsigned long free_mem_ptr_p,
 	__machine_arch_type	= arch_id;
 
 	arch_decomp_setup();
+	hi3620_decomp_trace(2, 0xd002d002);
 
 	putstr("Uncompressing Linux...");
 	ret = do_decompress(input_data, input_data_end - input_data,
@@ -165,4 +188,6 @@ decompress_kernel(unsigned long output_start, unsigned long free_mem_ptr_p,
 		error("decompressor returned an error");
 	else
 		putstr(" done, booting the kernel.\n");
+
+	hi3620_decomp_trace(3, 0xd003d003);
 }
