@@ -52,6 +52,26 @@
 	};
 
 	/*
+	 * Huawei's Android kernel exposes the USB device/OTG controller as a
+	 * Synopsys DesignWare HS OTG core at 0xfd240000 with GIC SPI 52.  The
+	 * fastboot loader necessarily leaves this controller's PicoPHY powered
+	 * and clocked.  For the first Linux gadget test, let generic DWC2 take
+	 * over the core in peripheral-only mode without resetting the external
+	 * PHY.  usb2dvc_clk is the SoC AHB/core gate; the PicoPHY gate is left
+	 * in the bootloader-established state and protected by clk_ignore_unused.
+	 */
+	usb_otg: usb@fd240000 {
+		compatible = "snps,dwc2";
+		reg = <0xfd240000 0x00040000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 52 4>;
+		clocks = <&clock HI3620_USB2DVC_CLK>;
+		clock-names = "otg";
+		dr_mode = "peripheral";
+		status = "okay";
+	};
+
+	/*
 	 * The stock MediaPad kernel is booted with mem=511M even though the
 	 * board has 1 GiB of DRAM.  Huawei allocates multimedia/display memory
 	 * from the upper half starting at 0x20000000.  During framebuffer
