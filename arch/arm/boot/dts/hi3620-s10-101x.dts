@@ -52,6 +52,7 @@
 			reg = <0x1ff01000 0x000ff000>;
 			record-size = <0x00040000>;
 			console-size = <0x00080000>;
+			unbuffered;
 		};
 	};
 
