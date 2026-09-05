@@ -32,20 +32,24 @@
 	};
 
 	/*
-	 * Reserve 1 MiB immediately below 512 MiB for persistent ramoops logs.
-	 * This is safely inside ARM lowmem with the current non-HIGHMEM 3G/1G
-	 * kernel, unlike the previous 0x34d00000 location near the top of RAM.
-	 * A matching debug recovery is limited to 511 MiB so it will not reuse
-	 * this region before the log is retrieved after a failed boot.
+	 * Reserve 1 MiB immediately below 512 MiB for persistent diagnostics.
+	 * The first 4 KiB is a raw boottrace page used by the zImage
+	 * decompressor and early Hi3620 platform code.  The remaining 1020 KiB
+	 * is ramoops storage.  The matching debug recovery is limited to 511 MiB
+	 * and therefore never allocates either region before they are dumped.
 	 */
 	reserved-memory {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges;
 
-		ramoops@1ff00000 {
+		boottrace@1ff00000 {
+			reg = <0x1ff00000 0x00001000>;
+		};
+
+		ramoops@1ff01000 {
 			compatible = "ramoops";
-			reg = <0x1ff00000 0x00100000>;
+			reg = <0x1ff01000 0x000ff000>;
 			record-size = <0x00040000>;
 			console-size = <0x00080000>;
 		};
