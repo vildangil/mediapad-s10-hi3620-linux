@@ -50,10 +50,13 @@ CONFIG_RMI4_F11=y
 CONFIG_RMI4_F12=y
 
 # udev/OpenRC need netlink/AF_UNIX. USB networking needs IPv4 for
-# 172.16.42.1/172.16.42.2. Keep IPv6 disabled to save boot space.
+# 172.16.42.1/172.16.42.2. unudhcpd uses an AF_PACKET socket to bind directly
+# to usb0, so CONFIG_PACKET is required; without it BusyBox reports
+# "Unable to bind to interface: Protocol not available".
 CONFIG_NET=y
 CONFIG_UNIX=y
 CONFIG_INET=y
+CONFIG_PACKET=y
 # CONFIG_IPV6 is not set
 
 CONFIG_SERIAL_AMBA_PL011=y
@@ -83,8 +86,8 @@ CONFIG_MMC_DW_K3=y
 # helper reproduces Huawei's PicoPHY reset/clock programming before the
 # generic DWC2 driver probes the core.
 #
-# postmarketOS initramfs already creates a configfs gadget, falls back from NCM
-# to RNDIS, assigns 172.16.42.1 to the gadget interface and starts unudhcpd.
+# postmarketOS initramfs creates a configfs RNDIS gadget, assigns
+# 172.16.42.1 to usb0 and starts unudhcpd.
 CONFIG_USB_GADGET=y
 CONFIG_USB_DWC2=y
 CONFIG_USB_DWC2_PERIPHERAL=y
