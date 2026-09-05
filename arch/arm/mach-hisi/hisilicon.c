@@ -84,6 +84,13 @@ static int __init hi3620_trace_core(void)
 }
 core_initcall(hi3620_trace_core);
 
+static int __init hi3620_trace_postcore(void)
+{
+	hi3620_boottrace(10, 0xa00aa00a);
+	return 0;
+}
+postcore_initcall(hi3620_trace_postcore);
+
 static int __init hi3620_trace_arch(void)
 {
 	hi3620_boottrace(8, 0xa008a008);
@@ -91,12 +98,40 @@ static int __init hi3620_trace_arch(void)
 }
 arch_initcall(hi3620_trace_arch);
 
+static int __init hi3620_trace_subsys(void)
+{
+	hi3620_boottrace(11, 0xa00ba00b);
+	return 0;
+}
+subsys_initcall(hi3620_trace_subsys);
+
+static int __init hi3620_trace_fs(void)
+{
+	hi3620_boottrace(12, 0xa00ca00c);
+	return 0;
+}
+fs_initcall(hi3620_trace_fs);
+
+static int __init hi3620_trace_rootfs(void)
+{
+	hi3620_boottrace(13, 0xa00da00d);
+	return 0;
+}
+rootfs_initcall(hi3620_trace_rootfs);
+
 static int __init hi3620_trace_device(void)
 {
 	hi3620_boottrace(9, 0xa009a009);
 	return 0;
 }
 device_initcall(hi3620_trace_device);
+
+static int __init hi3620_trace_late(void)
+{
+	hi3620_boottrace(14, 0xa00ea00e);
+	return 0;
+}
+late_initcall(hi3620_trace_late);
 
 static const char *const hi3xxx_compat[] __initconst = {
 	"hisilicon,hi3620-hi4511",
