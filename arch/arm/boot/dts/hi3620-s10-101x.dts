@@ -54,11 +54,8 @@
 	/*
 	 * Huawei's Android kernel exposes the USB device/OTG controller as a
 	 * Synopsys DesignWare HS OTG core at 0xfd240000 with GIC SPI 52.  The
-	 * fastboot loader necessarily leaves this controller's PicoPHY powered
-	 * and clocked.  For the first Linux gadget test, let generic DWC2 take
-	 * over the core in peripheral-only mode without resetting the external
-	 * PHY.  usb2dvc_clk is the SoC AHB/core gate; the PicoPHY gate is left
-	 * in the bootloader-established state and protected by clk_ignore_unused.
+	 * MediaPad-specific arch helper now reproduces Huawei's PicoPHY reset,
+	 * clock and VBUS/ID programming before generic DWC2 probes the core.
 	 */
 	usb_otg: usb@fd240000 {
 		compatible = "snps,dwc2";
@@ -69,6 +66,38 @@
 		clock-names = "otg";
 		dr_mode = "peripheral";
 		status = "okay";
+	};
+
+	/*
+	 * Stock board code places the Synaptics RMI4 touchscreen on I2C2.
+	 * Hi3620 I2C2 is a Synopsys DesignWare master at 0xfcb0c000, GIC SPI
+	 * 62.  Keep the bootloader-established pinmux and panel rails for this
+	 * first probe; explicit pinctrl/PMIC support can replace that once the
+	 * transport is proven.
+	 *
+	 * The stock touchscreen uses address 0x70, attention on GPIO157
+	 * (GPIO19 pin 5, active low) and reset on GPIO156 (GPIO19 pin 4).
+	 * Upstream Linux 4.9 RMI4 has no DT reset-gpio handling, so reset is not
+	 * toggled here yet; the 100 ms startup delay matches the vendor timing.
+	 */
+	i2c2: i2c@fcb0c000 {
+		compatible = "snps,designware-i2c";
+		reg = <0xfcb0c000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 62 4>;
+		clocks = <&clock HI3620_I2CCLK2>;
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		touchscreen@70 {
+			compatible = "syna,rmi4-i2c";
+			reg = <0x70>;
+			interrupt-parent = <&gpio19>;
+			interrupts = <5 8>;
+			syna,startup-delay-ms = <100>;
+		};
 	};
 
 	/*
