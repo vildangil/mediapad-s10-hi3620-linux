@@ -32,8 +32,8 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_BLK_DEV_RAM=y
 CONFIG_BLK_DEV_RAM_SIZE=65536
 
-# udev/OpenRC need netlink/AF_UNIX.  USB Ethernet needs IPv4 for the static
-# point-to-point address used for SSH.  Keep IPv6 disabled to save boot space.
+# udev/OpenRC need netlink/AF_UNIX. USB networking needs IPv4 for
+# 172.16.42.1/172.16.42.2. Keep IPv6 disabled to save boot space.
 CONFIG_NET=y
 CONFIG_UNIX=y
 CONFIG_INET=y
@@ -61,19 +61,18 @@ CONFIG_MMC_DW=y
 CONFIG_MMC_DW_PLTFM=y
 CONFIG_MMC_DW_K3=y
 
-# Hi3620 USB2DVC is a Synopsys DWC2 OTG core.  For the first bring-up use
+# Hi3620 USB2DVC is a Synopsys DWC2 OTG core. For the first bring-up use
 # peripheral-only mode: fastboot has already powered/configured the PicoPHY,
 # so Linux can attempt a non-destructive controller takeover while
 # clk_ignore_unused keeps the bootloader-established PHY clock alive.
 #
-# Use the legacy built-in Ethernet gadget instead of configfs.  It binds to
-# the first UDC automatically and exposes usb0 without requiring any rootfs
-# gadget setup.  RNDIS is included for Windows; ECM remains available for Linux.
+# postmarketOS initramfs already creates a configfs gadget, falls back from NCM
+# to RNDIS, assigns 172.16.42.1 to the gadget interface and starts unudhcpd.
 CONFIG_USB_GADGET=y
 CONFIG_USB_DWC2=y
 CONFIG_USB_DWC2_PERIPHERAL=y
-CONFIG_USB_ETH=y
-CONFIG_USB_ETH_RNDIS=y
+CONFIG_USB_CONFIGFS=y
+CONFIG_USB_CONFIGFS_RNDIS=y
 
 CONFIG_EXT4_FS=y
 CONFIG_TMPFS=y
