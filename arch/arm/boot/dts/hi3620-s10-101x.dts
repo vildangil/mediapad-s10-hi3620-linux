@@ -7,7 +7,6 @@
 /dts-v1/;
 
 #include "hi3620.dtsi"
-#include <dt-bindings/gpio/gpio.h>
 
 / {
 	model = "Huawei MediaPad 10 FHD S10-101x";
@@ -31,16 +30,6 @@
 	 *   CH2_STRIDE = 0x00001e00 (7680 = 1920 * 4)
 	 *   CH2_SIZE   = 0x077f04af (1919,1199 => 1920x1200)
 	 *   CH2_CTL    = 0x00230000 (enabled, ARGB8888, RGB order)
-	 *
-	 * Keep the first takeover deliberately simple: expose exactly the
-	 * currently scanned-out buffer to fbdev without touching EDC/LDI/MIPI
-	 * timing registers.  One 1920x1200x4 surface is 0x008ca000.
-	 *
-	 * Normally simple-framebuffer nodes live below /chosen, but this 4.9
-	 * tree's legacy of_platform population skips children of a compatible-
-	 * less /chosen node.  Put the bring-up node at the root so it is
-	 * guaranteed to become a platform device; the simplefb driver itself
-	 * has no path dependency.
 	 */
 	framebuffer0: framebuffer@2f300000 {
 		compatible = "simple-framebuffer";
@@ -55,14 +44,12 @@
 	/*
 	 * Huawei's Android kernel exposes the USB device/OTG controller as a
 	 * Synopsys DesignWare HS OTG core at 0xfd240000 with GIC SPI 52.  The
-	 * MediaPad-specific arch helper now reproduces Huawei's PicoPHY reset,
+	 * MediaPad-specific arch helper reproduces Huawei's PicoPHY reset,
 	 * clock and VBUS/ID programming before generic DWC2 probes the core.
 	 *
-	 * This core reports 3968 FIFO words.  Linux 4.9's legacy gadget defaults
-	 * consume more than that (RX 2048 + NPTX 1024 + legacy per-EP TX FIFOs),
-	 * which produced "insufficient fifo memory" as soon as configfs bound
-	 * RNDIS.  Use a conservative layout that fits with ample headroom while
-	 * still giving six dedicated IN endpoints 1 KiB each.
+	 * This core reports 3968 FIFO words. Linux 4.9's legacy gadget defaults
+	 * exceed that and trigger "insufficient fifo memory" when RNDIS binds.
+	 * Use a conservative dedicated-FIFO layout totalling 3072 words.
 	 */
 	usb_otg: usb@fd240000 {
 		compatible = "snps,dwc2";
@@ -81,14 +68,11 @@
 	/*
 	 * Stock board code places the Synaptics RMI4 touchscreen on I2C2.
 	 * Hi3620 I2C2 is a Synopsys DesignWare master at 0xfcb0c000, GIC SPI
-	 * 62.  Keep the bootloader-established pinmux and panel rails for now.
-	 *
-	 * The stock touchscreen uses address 0x70, attention on GPIO157
-	 * (GPIO19 pin 5, active low) and reset on GPIO156 (GPIO19 pin 4).
-	 * The vendor driver pulses reset low then high.  Upstream RMI4 in this
-	 * kernel does not consume a reset GPIO from DT, so GPIO19.4 is held high
-	 * by a gpio-hog below.  Probe at 100 kHz first for maximum margin on the
-	 * inherited pin configuration; speed can be raised after enumeration.
+	 * 62. The stock touchscreen uses address 0x70 and attention on GPIO157
+	 * (GPIO19 pin 5, active low). GPIO156/157 are dedicated GPIO pins in
+	 * Huawei's iomux database (no IOMG selector), so keep the bootloader's
+	 * reset/pad state for this probe and use PL061 only for the interrupt.
+	 * Probe at 100 kHz first for maximum signal margin.
 	 */
 	i2c2: i2c@fcb0c000 {
 		compatible = "snps,designware-i2c";
@@ -110,29 +94,14 @@
 		};
 	};
 
-	/*
-	 * The stock MediaPad kernel is booted with mem=511M even though the
-	 * board has 1 GiB of DRAM.  Huawei allocates multimedia/display memory
-	 * from the upper half starting at 0x20000000.  During framebuffer
-	 * takeover, mirror that split exactly so Linux cannot allocate pages
-	 * that the bootloader's EDC may still be scanning out.
-	 *
-	 * 0x00000000..0x1fefffff: normal Linux RAM (511 MiB)
-	 * 0x1ff00000..0x1fffffff: persistent diagnostics below the split
-	 * 0x20000000..            : vendor multimedia/display carve-outs
+	/* Match Huawei's stock mem=511M split so Linux cannot allocate the
+	 * bootloader-owned multimedia/display carveout above 0x20000000.
 	 */
 	memory@0 {
 		device_type = "memory";
 		reg = <0x00000000 0x1ff00000>;
 	};
 
-	/*
-	 * Reserve 1 MiB immediately below 512 MiB for persistent diagnostics.
-	 * The first 4 KiB is a raw boottrace page used by the zImage
-	 * decompressor and early Hi3620 platform code.  The remaining 1020 KiB
-	 * is ramoops storage.  Normal Linux RAM stops at 511 MiB, so neither
-	 * region can be allocated before it is dumped.
-	 */
 	reserved-memory {
 		#address-cells = <1>;
 		#size-cells = <1>;
@@ -151,23 +120,12 @@
 		};
 	};
 
-	/*
-	 * Hi3620 has a second clock provider for the DW-MMC card-interface
-	 * clocks.  It uses timing registers in the same system-controller
-	 * register block as the main clock controller.
-	 */
 	mmc_clock: mmc-clock@fc802000 {
 		compatible = "hisilicon,hi3620-mmc-clock";
 		reg = <0xfc802000 0x1000>;
 		#clock-cells = <1>;
 	};
 
-	/*
-	 * Stock Huawei kernel reports hi_mci.0 at 0xfcd03000 / Linux IRQ 48.
-	 * GIC SPI 16 maps to IRQ 48, exactly matching the upstream Hi3620
-	 * K3 DW-MSHC binding.  Avoid guessing the card-detect GPIO for now and
-	 * let the core poll the removable slot.
-	 */
 	sd_mmc: mmc@fcd03000 {
 		compatible = "hisilicon,hi4511-dw-mshc";
 		reg = <0xfcd03000 0x1000>;
@@ -187,12 +145,6 @@
 		status = "okay";
 	};
 
-	/*
-	 * Stock hi_mci.1 is the internal eMMC controller at 0xfcd04000 /
-	 * Linux IRQ 49, therefore GIC SPI 17.  Keep the bootloader-established
-	 * power and pin state for the first test; PMIC/regulator support can be
-	 * described once basic block I/O is proven.
-	 */
 	emmc: mmc@fcd04000 {
 		compatible = "hisilicon,hi4511-dw-mshc";
 		reg = <0xfcd04000 0x1000>;
@@ -213,29 +165,10 @@
 	};
 };
 
-/* Keep the stock reset line deasserted.  Huawei's vendor driver drives this
- * GPIO low for 10 ms and then high for 10 ms during probe.  A proper RMI4
- * reset-gpio quirk can replace this once transport diagnostics are complete.
- */
-&gpio19 {
-	touch_reset_hog: touch-reset-hog {
-		gpio-hog;
-		gpios = <4 GPIO_ACTIVE_HIGH>;
-		output-high;
-		line-name = "rmi4-reset";
-	};
-};
-
-/* SP804 timer already described by hi3620.dtsi. */
 &dual_timer0 {
 	status = "okay";
 };
 
-/*
- * UART0 maps to physical 0xfcb00000 through the AMBA window in
- * hi3620.dtsi.  Do not apply the Hi4511 development-board pinmux here;
- * retaining the bootloader pin setup is safer for the initial test.
- */
 &uart0 {
 	status = "okay";
 };
