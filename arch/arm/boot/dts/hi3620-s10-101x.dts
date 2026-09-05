@@ -32,19 +32,20 @@
 	};
 
 	/*
-	 * Keep the final 1 MiB of the stock-confirmed RAM range untouched by
-	 * Linux and use it as a persistent ramoops console/oops buffer.  A
-	 * matching debug recovery is limited to 845 MiB so it does not overwrite
-	 * this region before we can retrieve it after a failed boot.
+	 * Reserve 1 MiB immediately below 512 MiB for persistent ramoops logs.
+	 * This is safely inside ARM lowmem with the current non-HIGHMEM 3G/1G
+	 * kernel, unlike the previous 0x34d00000 location near the top of RAM.
+	 * A matching debug recovery is limited to 511 MiB so it will not reuse
+	 * this region before the log is retrieved after a failed boot.
 	 */
 	reserved-memory {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges;
 
-		ramoops@34d00000 {
+		ramoops@1ff00000 {
 			compatible = "ramoops";
-			reg = <0x34d00000 0x00100000>;
+			reg = <0x1ff00000 0x00100000>;
 			record-size = <0x00040000>;
 			console-size = <0x00080000>;
 		};
