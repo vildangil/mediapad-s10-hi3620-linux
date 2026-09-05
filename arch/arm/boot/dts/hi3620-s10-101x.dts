@@ -165,6 +165,17 @@
 	};
 };
 
+/* GPIO156/GPIO157 are dedicated GPIO pads in Huawei's iomux database and do
+ * not have IOMG selectors.  The generic hi3620.dtsi gpio-ranges table only
+ * describes GPIO19 pins 0..3; leaving the property present makes PL061 call
+ * pinctrl for pins 4/5 and rejects the touchscreen IRQ/reset requests.  On
+ * this board let PL061 own GPIO19 directly and retain the bootloader pad
+ * configuration.
+ */
+&gpio19 {
+	/delete-property/ gpio-ranges;
+};
+
 &dual_timer0 {
 	status = "okay";
 };
