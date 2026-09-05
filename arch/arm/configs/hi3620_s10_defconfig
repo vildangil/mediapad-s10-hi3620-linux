@@ -1,7 +1,7 @@
 # Huawei MediaPad 10 FHD S10-101x / HiSilicon Hi3620 bring-up
 #
 # Keep this intentionally small. The current milestone is CPU/GIC/timers/UART
-# plus SD/eMMC block I/O and a bootloader-framebuffer takeover for the panel.
+# plus eMMC, simplefb console and a USB gadget network path for remote access.
 
 CONFIG_SYSVIPC=y
 CONFIG_NO_HZ=y
@@ -32,11 +32,11 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_BLK_DEV_RAM=y
 CONFIG_BLK_DEV_RAM_SIZE=65536
 
-# postmarketOS initramfs/rootfs needs the networking core for netlink and
-# AF_UNIX control sockets used by udevd. Keep IP/packet networking out of the
-# tiny bring-up kernel for now so the legacy 8 MiB boot partition still fits.
+# udev/OpenRC need netlink/AF_UNIX.  USB networking additionally needs IPv4
+# because the postmarketOS initramfs assigns 172.16.42.1 and runs unudhcpd.
 CONFIG_NET=y
 CONFIG_UNIX=y
+CONFIG_INET=y
 
 CONFIG_SERIAL_AMBA_PL011=y
 CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
@@ -59,6 +59,16 @@ CONFIG_MMC_BLOCK=y
 CONFIG_MMC_DW=y
 CONFIG_MMC_DW_PLTFM=y
 CONFIG_MMC_DW_K3=y
+
+# Hi3620 USB2DVC is a Synopsys DWC2 OTG core.  For the first bring-up use
+# peripheral-only mode: fastboot has already powered/configured the PicoPHY,
+# so Linux can attempt a non-destructive controller takeover while
+# clk_ignore_unused keeps the bootloader-established PHY clock alive.
+CONFIG_USB_GADGET=y
+CONFIG_USB_DWC2=y
+CONFIG_USB_DWC2_PERIPHERAL=y
+CONFIG_USB_CONFIGFS=y
+CONFIG_USB_CONFIGFS_RNDIS=y
 
 CONFIG_EXT4_FS=y
 CONFIG_TMPFS=y
