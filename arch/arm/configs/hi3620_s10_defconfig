@@ -1,8 +1,7 @@
 # Huawei MediaPad 10 FHD S10-101x / HiSilicon Hi3620 bring-up
 #
 # Keep this intentionally small. The current milestone is CPU/GIC/timers/UART
-# plus SD/eMMC block I/O, which is enough to start postmarketOS initramfs and
-# rootfs bring-up before display/touch/Wi-Fi support is added.
+# plus SD/eMMC block I/O and a bootloader-framebuffer takeover for the panel.
 
 CONFIG_SYSVIPC=y
 CONFIG_NO_HZ=y
@@ -42,6 +41,16 @@ CONFIG_UNIX=y
 CONFIG_SERIAL_AMBA_PL011=y
 CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
 CONFIG_SERIAL_OF_PLATFORM=y
+
+# The bootloader leaves a working 1920x1200 ARGB8888 scanout on EDC0 CH2.
+# Register that existing surface as /dev/fb0 without touching display timing
+# registers, and use fbcon so kernel/userspace console output can be seen.
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_FB=y
+CONFIG_FB_SIMPLE=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FONT_8x16=y
 
 CONFIG_GPIO_PL061=y
 
