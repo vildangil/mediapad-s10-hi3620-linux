@@ -77,6 +77,19 @@ jobs:
           grep -n '\.section "\.start"' arch/arm/boot/compressed/head.S
           grep -n '\.piggydata' arch/arm/boot/compressed/piggy.S
 
+          # USB diagnostic build: the Hi3620 now reaches the PC, but the host
+          # fails the first device descriptor at high speed with EPROTO/-71.
+          # Force the gadget controller and advertised UDC capability to full
+          # speed so every USB reset stays in FS mode. If EP0 then works, the
+          # remaining fault is specifically in the HS PicoPHY/tuning path.
+          sed -i 's/DCFG_EPMISCNT(1) | DCFG_DEVSPD_HS/DCFG_EPMISCNT(1) | DCFG_DEVSPD_FS/' \
+            drivers/usb/dwc2/gadget.c
+          sed -i 's/hsotg->gadget.max_speed = USB_SPEED_HIGH;/hsotg->gadget.max_speed = USB_SPEED_FULL;/' \
+            drivers/usb/dwc2/gadget.c
+
+          grep -n 'DCFG_EPMISCNT(1).*DCFG_DEVSPD_' drivers/usb/dwc2/gadget.c
+          grep -n 'gadget.max_speed' drivers/usb/dwc2/gadget.c
+
       - name: Configure MediaPad Hi3620 kernel
         run: |
           mkdir -p out
