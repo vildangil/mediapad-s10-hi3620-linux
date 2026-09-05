@@ -22,21 +22,27 @@
 	};
 
 	/*
-	 * The running Huawei kernel exposes 0x00000000..0x34dfffff as System
-	 * RAM.  Keep the first bring-up inside that known-good range instead of
-	 * guessing the vendor carve-outs in the full 1 GiB physical layout.
+	 * The stock MediaPad kernel is booted with mem=511M even though the
+	 * board has 1 GiB of DRAM.  Huawei allocates multimedia/display memory
+	 * from the upper half starting at 0x20000000.  During framebuffer
+	 * takeover, mirror that split exactly so Linux cannot allocate pages
+	 * that the bootloader's EDC may still be scanning out.
+	 *
+	 * 0x00000000..0x1fefffff: normal Linux RAM (511 MiB)
+	 * 0x1ff00000..0x1fffffff: persistent diagnostics below the split
+	 * 0x20000000..            : vendor multimedia/display carve-outs
 	 */
 	memory@0 {
 		device_type = "memory";
-		reg = <0x00000000 0x34e00000>;
+		reg = <0x00000000 0x1ff00000>;
 	};
 
 	/*
 	 * Reserve 1 MiB immediately below 512 MiB for persistent diagnostics.
 	 * The first 4 KiB is a raw boottrace page used by the zImage
 	 * decompressor and early Hi3620 platform code.  The remaining 1020 KiB
-	 * is ramoops storage.  The matching debug recovery is limited to 511 MiB
-	 * and therefore never allocates either region before they are dumped.
+	 * is ramoops storage.  Normal Linux RAM stops at 511 MiB, so neither
+	 * region can be allocated before it is dumped.
 	 */
 	reserved-memory {
 		#address-cells = <1>;
