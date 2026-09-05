@@ -19,30 +19,36 @@
 		 */
 		bootargs = "console=ttyAMA0,115200n8 earlyprintk ignore_loglevel loglevel=8 root=/dev/ram0 rw";
 		stdout-path = "serial0:115200n8";
+	};
 
-		/*
-		 * The Huawei bootloader leaves EDC0 channel 2 scanning out this
-		 * surface.  Read-only register snapshots from the stock-established
-		 * pipeline show, unchanged from early_init through late_init:
-		 *
-		 *   CH2_ADDR   = 0x2f300000
-		 *   CH2_STRIDE = 0x00001e00 (7680 = 1920 * 4)
-		 *   CH2_SIZE   = 0x077f04af (1919,1199 => 1920x1200)
-		 *   CH2_CTL    = 0x00230000 (enabled, ARGB8888, RGB order)
-		 *
-		 * Keep the first takeover deliberately simple: expose exactly the
-		 * currently scanned-out buffer to fbdev without touching EDC/LDI/
-		 * MIPI timing registers.  One 1920x1200x4 surface is 0x008ca000.
-		 */
-		framebuffer0: framebuffer@2f300000 {
-			compatible = "simple-framebuffer";
-			reg = <0x2f300000 0x008ca000>;
-			width = <1920>;
-			height = <1200>;
-			stride = <7680>;
-			format = "a8r8g8b8";
-			status = "okay";
-		};
+	/*
+	 * The Huawei bootloader leaves EDC0 channel 2 scanning out this
+	 * surface.  Read-only register snapshots from the stock-established
+	 * pipeline show, unchanged from early_init through late_init:
+	 *
+	 *   CH2_ADDR   = 0x2f300000
+	 *   CH2_STRIDE = 0x00001e00 (7680 = 1920 * 4)
+	 *   CH2_SIZE   = 0x077f04af (1919,1199 => 1920x1200)
+	 *   CH2_CTL    = 0x00230000 (enabled, ARGB8888, RGB order)
+	 *
+	 * Keep the first takeover deliberately simple: expose exactly the
+	 * currently scanned-out buffer to fbdev without touching EDC/LDI/MIPI
+	 * timing registers.  One 1920x1200x4 surface is 0x008ca000.
+	 *
+	 * Normally simple-framebuffer nodes live below /chosen, but this 4.9
+	 * tree's legacy of_platform population skips children of a compatible-
+	 * less /chosen node.  Put the bring-up node at the root so it is
+	 * guaranteed to become a platform device; the simplefb driver itself
+	 * has no path dependency.
+	 */
+	framebuffer0: framebuffer@2f300000 {
+		compatible = "simple-framebuffer";
+		reg = <0x2f300000 0x008ca000>;
+		width = <1920>;
+		height = <1200>;
+		stride = <7680>;
+		format = "a8r8g8b8";
+		status = "okay";
 	};
 
 	/*
