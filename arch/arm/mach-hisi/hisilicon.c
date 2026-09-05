@@ -12,6 +12,7 @@
 */
 
 #include <linux/clocksource.h>
+#include <linux/init.h>
 #include <linux/irqchip.h>
 
 #include <asm/mach/arch.h>
@@ -19,6 +20,18 @@
 
 #define HI3620_SYSCTRL_PHYS_BASE		0xfc802000
 #define HI3620_SYSCTRL_VIRT_BASE		0xfe802000
+#define HI3620_BOOTTRACE_PHYS_BASE		0x1ff00000
+#define HI3620_BOOTTRACE_VIRT_BASE		0xfe803000
+
+static inline void hi3620_boottrace(unsigned int slot, unsigned int value)
+{
+	volatile unsigned int *trace =
+		(volatile unsigned int *)HI3620_BOOTTRACE_VIRT_BASE;
+
+	trace[0] = 0x43525442; /* "BTRC" in little endian memory. */
+	trace[slot] = value;
+	asm volatile("dsb sy" : : : "memory");
+}
 
 /*
  * This table is only for optimization. Since ioremap() could always share
@@ -36,20 +49,63 @@ static struct map_desc hi3620_io_desc[] __initdata = {
 		.length		= 0x1000,
 		.type		= MT_DEVICE,
 	},
+	{
+		/* Persistent early-boot breadcrumb page. */
+		.pfn		= __phys_to_pfn(HI3620_BOOTTRACE_PHYS_BASE),
+		.virtual	= HI3620_BOOTTRACE_VIRT_BASE,
+		.length		= 0x1000,
+		.type		= MT_DEVICE,
+	},
 };
 
 static void __init hi3620_map_io(void)
 {
 	debug_ll_io_init();
 	iotable_init(hi3620_io_desc, ARRAY_SIZE(hi3620_io_desc));
+	hi3620_boottrace(4, 0xa004a004);
 }
+
+static void __init hi3620_init_early(void)
+{
+	hi3620_boottrace(5, 0xa005a005);
+}
+
+static int __init hi3620_trace_pure(void)
+{
+	hi3620_boottrace(6, 0xa006a006);
+	return 0;
+}
+pure_initcall(hi3620_trace_pure);
+
+static int __init hi3620_trace_core(void)
+{
+	hi3620_boottrace(7, 0xa007a007);
+	return 0;
+}
+core_initcall(hi3620_trace_core);
+
+static int __init hi3620_trace_arch(void)
+{
+	hi3620_boottrace(8, 0xa008a008);
+	return 0;
+}
+arch_initcall(hi3620_trace_arch);
+
+static int __init hi3620_trace_device(void)
+{
+	hi3620_boottrace(9, 0xa009a009);
+	return 0;
+}
+device_initcall(hi3620_trace_device);
 
 static const char *const hi3xxx_compat[] __initconst = {
 	"hisilicon,hi3620-hi4511",
+	"hisilicon,hi3620",
 	NULL,
 };
 
 DT_MACHINE_START(HI3620, "Hisilicon Hi3620 (Flattened Device Tree)")
 	.map_io		= hi3620_map_io,
+	.init_early	= hi3620_init_early,
 	.dt_compat	= hi3xxx_compat,
 MACHINE_END
