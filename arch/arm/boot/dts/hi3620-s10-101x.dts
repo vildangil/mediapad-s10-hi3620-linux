@@ -7,6 +7,7 @@
 /dts-v1/;
 
 #include "hi3620.dtsi"
+#include <dt-bindings/gpio/gpio.h>
 
 / {
 	model = "Huawei MediaPad 10 FHD S10-101x";
@@ -56,6 +57,12 @@
 	 * Synopsys DesignWare HS OTG core at 0xfd240000 with GIC SPI 52.  The
 	 * MediaPad-specific arch helper now reproduces Huawei's PicoPHY reset,
 	 * clock and VBUS/ID programming before generic DWC2 probes the core.
+	 *
+	 * This core reports 3968 FIFO words.  Linux 4.9's legacy gadget defaults
+	 * consume more than that (RX 2048 + NPTX 1024 + legacy per-EP TX FIFOs),
+	 * which produced "insufficient fifo memory" as soon as configfs bound
+	 * RNDIS.  Use a conservative layout that fits with ample headroom while
+	 * still giving six dedicated IN endpoints 1 KiB each.
 	 */
 	usb_otg: usb@fd240000 {
 		compatible = "snps,dwc2";
@@ -65,20 +72,23 @@
 		clocks = <&clock HI3620_USB2DVC_CLK>;
 		clock-names = "otg";
 		dr_mode = "peripheral";
+		g-rx-fifo-size = <1024>;
+		g-np-tx-fifo-size = <512>;
+		g-tx-fifo-size = <256 256 256 256 256 256>;
 		status = "okay";
 	};
 
 	/*
 	 * Stock board code places the Synaptics RMI4 touchscreen on I2C2.
 	 * Hi3620 I2C2 is a Synopsys DesignWare master at 0xfcb0c000, GIC SPI
-	 * 62.  Keep the bootloader-established pinmux and panel rails for this
-	 * first probe; explicit pinctrl/PMIC support can replace that once the
-	 * transport is proven.
+	 * 62.  Keep the bootloader-established pinmux and panel rails for now.
 	 *
 	 * The stock touchscreen uses address 0x70, attention on GPIO157
 	 * (GPIO19 pin 5, active low) and reset on GPIO156 (GPIO19 pin 4).
-	 * Upstream Linux 4.9 RMI4 has no DT reset-gpio handling, so reset is not
-	 * toggled here yet; the 100 ms startup delay matches the vendor timing.
+	 * The vendor driver pulses reset low then high.  Upstream RMI4 in this
+	 * kernel does not consume a reset GPIO from DT, so GPIO19.4 is held high
+	 * by a gpio-hog below.  Probe at 100 kHz first for maximum margin on the
+	 * inherited pin configuration; speed can be raised after enumeration.
 	 */
 	i2c2: i2c@fcb0c000 {
 		compatible = "snps,designware-i2c";
@@ -86,7 +96,7 @@
 		interrupt-parent = <&gic>;
 		interrupts = <0 62 4>;
 		clocks = <&clock HI3620_I2CCLK2>;
-		clock-frequency = <400000>;
+		clock-frequency = <100000>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 		status = "okay";
@@ -200,6 +210,19 @@
 		disable-wp;
 		cap-mmc-highspeed;
 		status = "okay";
+	};
+};
+
+/* Keep the stock reset line deasserted.  Huawei's vendor driver drives this
+ * GPIO low for 10 ms and then high for 10 ms during probe.  A proper RMI4
+ * reset-gpio quirk can replace this once transport diagnostics are complete.
+ */
+&gpio19 {
+	touch_reset_hog: touch-reset-hog {
+		gpio-hog;
+		gpios = <4 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "rmi4-reset";
 	};
 };
 
