@@ -1,7 +1,7 @@
 # Huawei MediaPad 10 FHD S10-101x / HiSilicon Hi3620 bring-up
 #
 # Keep this intentionally small. The current milestone is CPU/GIC/timers/UART
-# plus eMMC, simplefb console and a USB gadget network path for remote access.
+# plus eMMC, simplefb console, USB gadget networking and touchscreen input.
 
 CONFIG_SYSVIPC=y
 CONFIG_NO_HZ=y
@@ -32,13 +32,22 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_BLK_DEV_RAM=y
 CONFIG_BLK_DEV_RAM_SIZE=65536
 
-# fbkeyboard needs /dev/uinput to inject key events. UINPUT lives below the
-# INPUT_MISC menu in this 4.9 tree, so INPUT_MISC must be enabled as well.
-# EVDEV is needed once the Synaptics touchscreen is exposed to userspace.
+# fbkeyboard needs /dev/uinput to inject key events and an EV_ABS touchscreen
+# to select as its input source. UINPUT lives below INPUT_MISC in this tree.
 CONFIG_INPUT=y
 CONFIG_INPUT_EVDEV=y
 CONFIG_INPUT_MISC=y
 CONFIG_INPUT_UINPUT=y
+
+# Synaptics panel controller used by the stock MediaPad firmware.  The first
+# test keeps the bootloader-established pinmux/power state and probes I2C2.
+CONFIG_I2C=y
+CONFIG_I2C_CHARDEV=y
+CONFIG_I2C_DESIGNWARE_PLATFORM=y
+CONFIG_RMI4_CORE=y
+CONFIG_RMI4_I2C=y
+CONFIG_RMI4_F11=y
+CONFIG_RMI4_F12=y
 
 # udev/OpenRC need netlink/AF_UNIX. USB networking needs IPv4 for
 # 172.16.42.1/172.16.42.2. Keep IPv6 disabled to save boot space.
@@ -59,6 +68,7 @@ CONFIG_VT_CONSOLE=y
 CONFIG_FB=y
 CONFIG_FB_SIMPLE=y
 CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE_ROTATION=y
 CONFIG_FONT_8x16=y
 
 CONFIG_GPIO_PL061=y
