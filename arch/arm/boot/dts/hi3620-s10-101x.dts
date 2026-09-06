@@ -13,24 +13,10 @@
 	compatible = "huawei,s10-101x", "hisilicon,hi3620";
 
 	chosen {
-		/*
-		 * Stock cmdline reports console=ttyS0.  The upstream Hi3620 UART is
-		 * an ARM PL011 and Linux exposes it as ttyAMA0.
-		 */
 		bootargs = "console=ttyAMA0,115200n8 earlyprintk ignore_loglevel loglevel=8 root=/dev/ram0 rw";
 		stdout-path = "serial0:115200n8";
 	};
 
-	/*
-	 * The Huawei bootloader leaves EDC0 channel 2 scanning out this
-	 * surface.  Read-only register snapshots from the stock-established
-	 * pipeline show, unchanged from early_init through late_init:
-	 *
-	 *   CH2_ADDR   = 0x2f300000
-	 *   CH2_STRIDE = 0x00001e00 (7680 = 1920 * 4)
-	 *   CH2_SIZE   = 0x077f04af (1919,1199 => 1920x1200)
-	 *   CH2_CTL    = 0x00230000 (enabled, ARGB8888, RGB order)
-	 */
 	framebuffer0: framebuffer@2f300000 {
 		compatible = "simple-framebuffer";
 		reg = <0x2f300000 0x008ca000>;
@@ -41,16 +27,6 @@
 		status = "okay";
 	};
 
-	/*
-	 * Huawei's Android kernel exposes the USB device/OTG controller as a
-	 * Synopsys DesignWare HS OTG core at 0xfd240000 with GIC SPI 52.  The
-	 * MediaPad-specific arch helper reproduces Huawei's PicoPHY reset,
-	 * clock and VBUS/ID programming before generic DWC2 probes the core.
-	 *
-	 * This core reports 3968 FIFO words. Linux 4.9's legacy gadget defaults
-	 * exceed that and trigger "insufficient fifo memory" when RNDIS binds.
-	 * Use a conservative dedicated-FIFO layout totalling 3072 words.
-	 */
 	usb_otg: usb@fd240000 {
 		compatible = "snps,dwc2";
 		reg = <0xfd240000 0x00040000>;
@@ -66,10 +42,9 @@
 	};
 
 	/*
-	 * Keep I2C1 described for later board bring-up, but the current tablet
-	 * has now been electrically narrowed down to the stock I2C2 path.  Do
-	 * not instantiate a second fake RMI client here: it only creates probe
-	 * noise and cannot be the touchscreen on this unit.
+	 * This tablet is the stock I2C2 Synaptics variant.  Keep the alternate
+	 * I2C1 controller disabled so it neither changes unused pads nor produces
+	 * misleading touch-probe noise.
 	 */
 	i2c1: i2c@fcb09000 {
 		compatible = "snps,designware-i2c";
@@ -78,18 +53,15 @@
 		interrupts = <0 29 4>;
 		clocks = <&clock HI3620_I2CCLK1>;
 		clock-frequency = <100000>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&i2c1_pins>;
 		#address-cells = <1>;
 		#size-cells = <0>;
-		status = "okay";
+		status = "disabled";
 	};
 
 	/*
-	 * Stock board code places the Synaptics RMI4 touchscreen on I2C2.
-	 * Hi3620 I2C2 is a Synopsys DesignWare master at 0xfcb0c000, GIC SPI
-	 * 62. The stock touchscreen uses address 0x70 and attention on GPIO157
-	 * (GPIO19 pin 5, active low). GPIO156 is reset.
+	 * Stock board code places Synaptics RMI4 at 0x70 on physical I2C2.
+	 * Hi3620 I2C2 is DesignWare at 0xfcb0c000, GIC SPI62.  GPIO157 is
+	 * active-low ATTN and GPIO156 is reset.
 	 */
 	i2c2: i2c@fcb0c000 {
 		compatible = "snps,designware-i2c";
@@ -109,13 +81,10 @@
 			reg = <0x70>;
 			interrupt-parent = <&gpio19>;
 			interrupts = <5 8>;
-			syna,startup-delay-ms = <100>;
+			syna,startup-delay-ms = <300>;
 		};
 	};
 
-	/* Match Huawei's stock mem=511M split so Linux cannot allocate the
-	 * bootloader-owned multimedia/display carveout above 0x20000000.
-	 */
 	memory@0 {
 		device_type = "memory";
 		reg = <0x00000000 0x1ff00000>;
@@ -184,35 +153,19 @@
 	};
 };
 
-/* IOMG46 function 1 routes GPIO86/GPIO87 to I2C1 SCL/SDA. */
 &pmx0 {
-	i2c1_pins: i2c1-pins {
-		pinctrl-single,pins = <
-			0x0b8 0x1
-		>;
-	};
-
-	/* Stock K3V2 iomux_pins.h says GPIO63/GPIO64 are I2C2 SCL/SDA on FUNC1. */
+	/*
+	 * Important: on Hi3620 the mux encoding is function 0 for I2C2.
+	 * The in-tree hi3620-hi4511.dts uses 0 here; function 1 is GPIO/idle.
+	 */
 	i2c2_pins: i2c2-pins {
 		pinctrl-single,pins = <
-			0x068 0x1
-			0x06c 0x1
+			0x068 0x0
+			0x06c 0x0
 		>;
 	};
 };
 
-/*
- * GPIO156/GPIO157 are dedicated GPIO pads in Huawei's iomux database and do
- * not have IOMG selectors.  The generic hi3620.dtsi gpio-ranges table only
- * describes GPIO19 pins 0..3, so let PL061 own this bank directly.
- *
- * More importantly, the late diagnostic on the real tablet showed GPIO156
- * losing its output direction (dir changed from 0x12 to 0x02), which leaves
- * the Synaptics controller held in reset and turns the formerly hanging I2C2
- * bus into a clean NACK.  A GPIO hog is the right lifetime model here: the
- * stock RMI transport never owns the reset line itself, so keep reset high
- * for the whole boot after the early stock-style pulse in hi3620-touch-pad.c.
- */
 &gpio19 {
 	/delete-property/ gpio-ranges;
 
