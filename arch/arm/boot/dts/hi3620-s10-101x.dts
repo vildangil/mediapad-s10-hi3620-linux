@@ -69,7 +69,14 @@
 		interrupt-parent = <&gic>;
 		interrupts = <0 62 4>;
 		clocks = <&clock HI3620_I2CCLK2>;
-		clock-frequency = <100000>;
+		/*
+		 * Vendor K3V2 clocks I2C2 from clk_cfgaxi (48 MHz on CS silicon),
+		 * while the upstream Hi3620 clock table reports i2cclk2 as 26 MHz.
+		 * Ask DesignWare for 50 kHz so its counters produce ~92 kHz on the
+		 * real 48 MHz input; this is a bring-up workaround until the clock
+		 * parent model is corrected.
+		 */
+		clock-frequency = <50000>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&i2c2_pins>;
 		#address-cells = <1>;
