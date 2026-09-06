@@ -66,6 +66,34 @@
 	};
 
 	/*
+	 * Some K3V2 board revisions route touch through I2C1.  Keep a second
+	 * Synaptics RMI4 client here while bringing up this exact tablet so a
+	 * board-revision difference does not leave fbkeyboard without EV_ABS.
+	 * The helper in mach-hisi applies Huawei's I2C1 reset/SDA-delay setup.
+	 */
+	i2c1: i2c@fcb09000 {
+		compatible = "snps,designware-i2c";
+		reg = <0xfcb09000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 29 4>;
+		clocks = <&clock HI3620_I2CCLK1>;
+		clock-frequency = <100000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c1_pins>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		touchscreen@70 {
+			compatible = "syna,rmi4-i2c";
+			reg = <0x70>;
+			interrupt-parent = <&gpio19>;
+			interrupts = <5 8>;
+			syna,startup-delay-ms = <100>;
+		};
+	};
+
+	/*
 	 * Stock board code places the Synaptics RMI4 touchscreen on I2C2.
 	 * Hi3620 I2C2 is a Synopsys DesignWare master at 0xfcb0c000, GIC SPI
 	 * 62. The stock touchscreen uses address 0x70 and attention on GPIO157
@@ -168,10 +196,17 @@
 	};
 };
 
-/* Explicit stock I2C2 pad mux.  IOMG26/IOMG27 are at 0x68/0x6c in pmx0;
- * function 0 selects I2C2 SCL/SDA on the production K3V2 silicon.
- */
+/* IOMG46 function 1 routes GPIO86/GPIO87 to I2C1 SCL/SDA. */
 &pmx0 {
+	i2c1_pins: i2c1-pins {
+		pinctrl-single,pins = <
+			0x0b8 0x1
+		>;
+	};
+
+	/* Explicit stock I2C2 pad mux.  IOMG26/IOMG27 are at 0x68/0x6c;
+	 * function 0 selects I2C2 SCL/SDA on production K3V2 silicon.
+	 */
 	i2c2_pins: i2c2-pins {
 		pinctrl-single,pins = <
 			0x068 0x0
