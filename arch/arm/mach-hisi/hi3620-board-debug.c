@@ -2,14 +2,13 @@
 /*
  * Small MediaPad 10 FHD board-specific bring-up helpers.
  *
- * Keep this separate from generic Hi3620 support: it only runs on the
- * huawei,s10-101x compatible and exists to reproduce vendor setup that is
- * missing from the upstream DT/DesignWare drivers while bring-up is ongoing.
+ * Keep only setup/recovery that is still useful in normal boot.  Routine
+ * post-login register dumps were valuable during bring-up but now just bury
+ * the console and ramoops.
  */
 
 #include <linux/bitops.h>
 #include <linux/delay.h>
-#include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/jiffies.h>
@@ -25,9 +24,14 @@
 #define HI3620_GPIO21_PHYS             0xfc81b000
 #define HI3620_MAP_SIZE                0x1000
 
-/* Stock K3V2 iomux: IOMG26/IOMG27 function 0 = I2C2 SCL/SDA. */
+/* Stock K3V2 iomux: GPIO63/64 use FUNC1 for I2C2 SCL/SDA. */
 #define IOMG26_I2C2_SCL                0x068
 #define IOMG27_I2C2_SDA                0x06c
+#define IOMG_I2C_FUNC                  0x1
+#define IOCG79_I2C2_SCL                0x918
+#define IOCG80_I2C2_SDA                0x91c
+#define IOCG_PULL_MASK                 0x3
+#define IOCG_NOPULL                    0x0
 
 /* Stock common.c I2C controller reset registers. */
 #define SCTRL_I2C_RST_EN               0x098
@@ -60,11 +64,8 @@
 
 static unsigned int bl_watch_count;
 static void hi3620_mediapad_backlight_watch(struct work_struct *work);
-static void hi3620_mediapad_i2c_probe(struct work_struct *work);
 static DECLARE_DELAYED_WORK(hi3620_bl_watch_work,
                             hi3620_mediapad_backlight_watch);
-static DECLARE_DELAYED_WORK(hi3620_i2c_probe_work,
-                            hi3620_mediapad_i2c_probe);
 
 static int __init hi3620_mediapad_i2c2_prepare(void)
 {
@@ -73,6 +74,7 @@ static int __init hi3620_mediapad_i2c2_prepare(void)
         void __iomem *pctrl;
         void __iomem *i2c;
         u32 stat;
+        u32 pad;
         unsigned int timeout;
 
         if (!of_machine_is_compatible("huawei,s10-101x"))
@@ -95,18 +97,17 @@ static int __init hi3620_mediapad_i2c2_prepare(void)
                 return -ENOMEM;
         }
 
-        pr_info("HI3620-I2C2: pre mux_scl=%08x mux_sda=%08x rst=%08x enable=%08x status=%08x comp=%08x ver=%08x\n",
-                readl(iomux + IOMG26_I2C2_SCL),
-                readl(iomux + IOMG27_I2C2_SDA),
-                readl(sctrl + SCTRL_I2C_RST_STAT),
-                readl(i2c + DW_IC_ENABLE), readl(i2c + DW_IC_STATUS),
-                readl(i2c + DW_IC_COMP_TYPE), readl(i2c + DW_IC_COMP_VERSION));
+        /* Match Huawei's NORMAL state: FUNC1 and no internal pulls. */
+        writel(IOMG_I2C_FUNC, iomux + IOMG26_I2C2_SCL);
+        writel(IOMG_I2C_FUNC, iomux + IOMG27_I2C2_SDA);
+        pad = readl(iomux + IOCG79_I2C2_SCL);
+        writel((pad & ~IOCG_PULL_MASK) | IOCG_NOPULL,
+               iomux + IOCG79_I2C2_SCL);
+        pad = readl(iomux + IOCG80_I2C2_SDA);
+        writel((pad & ~IOCG_PULL_MASK) | IOCG_NOPULL,
+               iomux + IOCG80_I2C2_SDA);
 
-        /* Force the physical pads to the function documented by Huawei. */
-        writel(0, iomux + IOMG26_I2C2_SCL);
-        writel(0, iomux + IOMG27_I2C2_SDA);
-
-        /* Reset the DesignWare block exactly like vendor common.c. */
+        /* Reset the DesignWare block like vendor common.c. */
         writel(I2C2_RESET_BIT, sctrl + SCTRL_I2C_RST_EN);
         timeout = 1000;
         do {
@@ -126,15 +127,15 @@ static int __init hi3620_mediapad_i2c2_prepare(void)
                 udelay(1);
         } while (--timeout);
 
-        /* This write uses Huawei's write-mask convention and only touches I2C2. */
         writel(I2C2_ENABLE_DELAY_SDA, pctrl + PCTRL_I2C23_DELAY);
         udelay(10);
 
-        pr_info("HI3620-I2C2: post mux_scl=%08x mux_sda=%08x rst=%08x enable=%08x status=%08x comp=%08x ver=%08x\n",
+        pr_info("HI3620-I2C2: mux=%08x/%08x pad=%08x/%08x rst=%08x comp=%08x ver=%08x\n",
                 readl(iomux + IOMG26_I2C2_SCL),
                 readl(iomux + IOMG27_I2C2_SDA),
+                readl(iomux + IOCG79_I2C2_SCL),
+                readl(iomux + IOCG80_I2C2_SDA),
                 readl(sctrl + SCTRL_I2C_RST_STAT),
-                readl(i2c + DW_IC_ENABLE), readl(i2c + DW_IC_STATUS),
                 readl(i2c + DW_IC_COMP_TYPE), readl(i2c + DW_IC_COMP_VERSION));
 
         iounmap(i2c);
@@ -146,69 +147,15 @@ static int __init hi3620_mediapad_i2c2_prepare(void)
 postcore_initcall(hi3620_mediapad_i2c2_prepare);
 
 /*
- * Probe the Linux-visible I2C adapters after OF population.  The stock
- * K3V2OEM1 build uses Synaptics RMI4 at 0x70.  We deliberately probe all
- * early adapter numbers because upstream DT does not guarantee that the
- * physical I2C2 controller becomes /dev/i2c-2.  A successful page-select and
- * PDT read proves the electrical bus/device separately from the RMI driver.
- */
-static void hi3620_mediapad_i2c_probe(struct work_struct *work)
-{
-        struct i2c_adapter *adap;
-        struct i2c_msg msg;
-        struct i2c_msg msgs[2];
-        u8 page[2] = { 0xff, 0x00 };
-        u8 reg = 0xe9;
-        u8 pdt[6] = { 0 };
-        int nr;
-        int ret_page;
-        int ret_pdt;
-
-        if (!of_machine_is_compatible("huawei,s10-101x"))
-                return;
-
-        for (nr = 0; nr < 4; nr++) {
-                adap = i2c_get_adapter(nr);
-                if (!adap) {
-                        pr_info("HI3620-TOUCH-PROBE: i2c-%d absent\n", nr);
-                        continue;
-                }
-
-                memset(&msg, 0, sizeof(msg));
-                msg.addr = 0x70;
-                msg.len = sizeof(page);
-                msg.buf = page;
-                ret_page = i2c_transfer(adap, &msg, 1);
-
-                memset(msgs, 0, sizeof(msgs));
-                msgs[0].addr = 0x70;
-                msgs[0].len = 1;
-                msgs[0].buf = &reg;
-                msgs[1].addr = 0x70;
-                msgs[1].flags = I2C_M_RD;
-                msgs[1].len = sizeof(pdt);
-                msgs[1].buf = pdt;
-                ret_pdt = i2c_transfer(adap, msgs, 2);
-
-                pr_info("HI3620-TOUCH-PROBE: i2c-%d name='%s' page=%d pdt=%d data=%02x %02x %02x %02x %02x %02x\n",
-                        nr, adap->name, ret_page, ret_pdt,
-                        pdt[0], pdt[1], pdt[2], pdt[3], pdt[4], pdt[5]);
-                i2c_put_adapter(adap);
-        }
-}
-
-/*
- * The inherited EDC/LDI/MIPI path stays stable while the panel sometimes
- * later becomes black.  Sample PWM0 and LCD_POWER too.  If either inherited
- * backlight control is actually turned off, restore only the already-proven
- * bootloader values so bring-up remains usable while we find the writer.
+ * Keep the backlight recovery because it stopped the two-minute black-screen
+ * regression, but stay completely silent unless something actually needs to
+ * be restored.
  */
 static void hi3620_mediapad_backlight_watch(struct work_struct *work)
 {
         void __iomem *pwm;
         void __iomem *gpio;
         u32 ctl;
-        u32 div;
         u32 out;
         u32 power;
         u8 dir;
@@ -220,7 +167,6 @@ static void hi3620_mediapad_backlight_watch(struct work_struct *work)
         pwm = ioremap(HI3620_PWM0_PHYS, HI3620_MAP_SIZE);
         gpio = ioremap(HI3620_GPIO21_PHYS, HI3620_MAP_SIZE);
         if (!pwm || !gpio) {
-                pr_err("HI3620-BL-WATCH: failed to map PWM0/GPIO21\n");
                 if (gpio)
                         iounmap(gpio);
                 if (pwm)
@@ -229,14 +175,9 @@ static void hi3620_mediapad_backlight_watch(struct work_struct *work)
         }
 
         ctl = readl(pwm + PWM_CTL);
-        div = readl(pwm + PWM_DIV);
         out = readl(pwm + PWM_OUT);
         power = readb(gpio + PL061_DATA(LCD_POWER_PIN));
         dir = readb(gpio + PL061_GPIODIR);
-
-        pr_info("HI3620-BL-WATCH[%u]: pwm_ctl=%08x pwm_div=%08x pwm_out=%08x lcd_power=%u gpio21_dir=%02x\n",
-                bl_watch_count, ctl, div, out,
-                !!(power & BIT(LCD_POWER_PIN)), dir);
 
         if (!(dir & BIT(LCD_POWER_PIN)) || !(power & BIT(LCD_POWER_PIN))) {
                 writeb(dir | BIT(LCD_POWER_PIN), gpio + PL061_GPIODIR);
@@ -252,11 +193,7 @@ static void hi3620_mediapad_backlight_watch(struct work_struct *work)
         }
 
         if (repaired)
-                pr_warn("HI3620-BL-WATCH: restored inherited backlight: pwm_ctl=%08x pwm_div=%08x pwm_out=%08x lcd_power=%u dir=%02x\n",
-                        readl(pwm + PWM_CTL), readl(pwm + PWM_DIV),
-                        readl(pwm + PWM_OUT),
-                        !!(readb(gpio + PL061_DATA(LCD_POWER_PIN)) & BIT(LCD_POWER_PIN)),
-                        readb(gpio + PL061_GPIODIR));
+                pr_warn("HI3620-BACKLIGHT: restored inherited panel/backlight state\n");
 
         iounmap(gpio);
         iounmap(pwm);
@@ -266,13 +203,10 @@ static void hi3620_mediapad_backlight_watch(struct work_struct *work)
                 schedule_delayed_work(&hi3620_bl_watch_work, 15 * HZ);
 }
 
-static int __init hi3620_mediapad_late_debug_start(void)
+static int __init hi3620_mediapad_late_recovery_start(void)
 {
-        if (!of_machine_is_compatible("huawei,s10-101x"))
-                return 0;
-
-        schedule_delayed_work(&hi3620_i2c_probe_work, 15 * HZ);
-        schedule_delayed_work(&hi3620_bl_watch_work, 15 * HZ);
+        if (of_machine_is_compatible("huawei,s10-101x"))
+                schedule_delayed_work(&hi3620_bl_watch_work, 15 * HZ);
         return 0;
 }
-late_initcall(hi3620_mediapad_late_debug_start);
+late_initcall(hi3620_mediapad_late_recovery_start);
