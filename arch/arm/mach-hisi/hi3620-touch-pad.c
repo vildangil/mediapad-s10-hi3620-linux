@@ -160,6 +160,8 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
         void __iomem *iocfg;
         void __iomem *gpio;
         void __iomem *pmu;
+        bool is_mediapad;
+        bool is_current_dt;
         u32 cfg156;
         u32 cfg157;
         u8 ldo5_old;
@@ -169,7 +171,18 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
         u8 dir;
         u8 attn;
 
-        if (!of_machine_is_compatible("huawei,s10-101x"))
+        is_mediapad = of_machine_is_compatible("huawei,s10-101x");
+        is_current_dt = of_machine_is_compatible("hisilicon,hi3620-hi4511");
+
+        pr_info("HI3620-TOUCH: init compatible mediapad=%u hi4511=%u\n",
+                is_mediapad, is_current_dt);
+
+        /*
+         * The branch still boots the upstream hi3620-hi4511 DTB, even though
+         * it has been repurposed for the MediaPad 10 FHD.  Accept that root
+         * compatible until the board DT gets its own MediaPad compatible.
+         */
+        if (!is_mediapad && !is_current_dt)
                 return 0;
 
         iocfg = ioremap(HI3620_IOCFG_PHYS, HI3620_MAP_SIZE);
