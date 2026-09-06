@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/platform_device.h>
 #include <linux/gpio.h>
+#include <linux/delay.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 
@@ -83,6 +84,51 @@ static int i2c_gpio_getscl(void *data)
 	struct i2c_gpio_platform_data *pdata = data;
 
 	return gpio_get_value(pdata->scl_pin);
+}
+
+/*
+ * Temporary MediaPad bring-up check.  The generic bit algorithm normally
+ * folds both an address NAK and an SCL-high timeout into -ENXIO while doing
+ * the address phase.  Exercise the two physical lines before registering the
+ * adapter so the boot log tells us whether GPIO mode can actually drive low
+ * and whether the board pull-ups can release each line high.
+ */
+static void i2c_gpio_mediapad_line_test(struct device *dev,
+				       struct i2c_gpio_platform_data *pdata)
+{
+	int idle_sda;
+	int idle_scl;
+	int sda_low;
+	int sda_release;
+	int scl_low;
+	int scl_release;
+
+	if (!of_machine_is_compatible("huawei,s10-101x"))
+		return;
+
+	gpio_direction_input(pdata->sda_pin);
+	gpio_direction_input(pdata->scl_pin);
+	udelay(20);
+	idle_sda = gpio_get_value(pdata->sda_pin);
+	idle_scl = gpio_get_value(pdata->scl_pin);
+
+	gpio_direction_output(pdata->sda_pin, 0);
+	udelay(20);
+	sda_low = gpio_get_value(pdata->sda_pin);
+	gpio_direction_input(pdata->sda_pin);
+	udelay(20);
+	sda_release = gpio_get_value(pdata->sda_pin);
+
+	gpio_direction_output(pdata->scl_pin, 0);
+	udelay(20);
+	scl_low = gpio_get_value(pdata->scl_pin);
+	gpio_direction_input(pdata->scl_pin);
+	udelay(20);
+	scl_release = gpio_get_value(pdata->scl_pin);
+
+	dev_info(dev,
+		 "HI3620-I2C-GPIO-LINES: idle sda=%d scl=%d sda_low=%d sda_release=%d scl_low=%d scl_release=%d\n",
+		 idle_sda, idle_scl, sda_low, sda_release, scl_low, scl_release);
 }
 
 static int of_i2c_gpio_get_pins(struct device_node *np,
@@ -208,6 +254,8 @@ static int i2c_gpio_probe(struct platform_device *pdev)
 		bit_data->timeout = HZ / 10;		/* 100 ms */
 
 	bit_data->data = pdata;
+
+	i2c_gpio_mediapad_line_test(&pdev->dev, pdata);
 
 	adap->owner = THIS_MODULE;
 	if (pdev->dev.of_node)
