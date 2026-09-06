@@ -54,6 +54,8 @@
 #define DW_IC_SS_SCL_LCNT               0x018
 #define DW_IC_FS_SCL_HCNT               0x01c
 #define DW_IC_FS_SCL_LCNT               0x020
+#define DW_IC_INTR_STAT                 0x02c
+#define DW_IC_INTR_MASK                 0x030
 #define DW_IC_RAW_INTR_STAT             0x034
 #define DW_IC_ENABLE                    0x06c
 #define DW_IC_STATUS                    0x070
@@ -82,7 +84,8 @@
 #define I2C2_SCL_PIN                   7       /* GPIO63 = GPIO7_7 */
 #define I2C2_SDA_PIN                   0       /* GPIO64 = GPIO8_0 */
 
-#define TOUCH_I2C_DIAG_SAMPLES         60
+/* Keep tracing long enough to cover deferred pinctrl/I2C probe and RMI timeout. */
+#define TOUCH_I2C_DIAG_SAMPLES         300
 #define TOUCH_I2C_DIAG_PERIOD_MS       50
 
 static struct delayed_work hi3620_touch_i2c_diag_work;
@@ -104,7 +107,7 @@ static void hi3620_touch_i2c_diag_workfn(struct work_struct *work)
                 return;
         }
 
-        pr_info("HI3620-TOUCH-I2C-DIAG[%u]: con=%08x tar=%08x ss=%08x/%08x fs=%08x/%08x raw=%08x en=%08x stat=%08x tx=%08x rx=%08x abrt=%08x enstat=%08x\n",
+        pr_info("HI3620-TOUCH-I2C-DIAG[%u]: con=%08x tar=%08x ss=%08x/%08x fs=%08x/%08x intr=%08x mask=%08x raw=%08x en=%08x stat=%08x tx=%08x rx=%08x abrt=%08x enstat=%08x\n",
                 n,
                 readl(i2c + DW_IC_CON),
                 readl(i2c + DW_IC_TAR),
@@ -112,6 +115,8 @@ static void hi3620_touch_i2c_diag_workfn(struct work_struct *work)
                 readl(i2c + DW_IC_SS_SCL_LCNT),
                 readl(i2c + DW_IC_FS_SCL_HCNT),
                 readl(i2c + DW_IC_FS_SCL_LCNT),
+                readl(i2c + DW_IC_INTR_STAT),
+                readl(i2c + DW_IC_INTR_MASK),
                 readl(i2c + DW_IC_RAW_INTR_STAT),
                 readl(i2c + DW_IC_ENABLE),
                 readl(i2c + DW_IC_STATUS),
@@ -312,9 +317,10 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
         hi3620_mediapad_i2c2_bus_recover();
 
         /*
-         * Temporary bring-up trace.  Sample I2C2 every 50 ms for three seconds
-         * so ramoops catches the controller immediately before, during and
-         * after the first RMI page-select transaction.
+         * Temporary bring-up trace.  Sample I2C2 every 50 ms for 15 seconds.
+         * The controller initially defers until pinctrl is registered, so the
+         * old three-second window only captured bootloader register residue.
+         * This longer window covers the actual first RMI page-select timeout.
          */
         hi3620_touch_i2c_diag_iter = 0;
         INIT_DELAYED_WORK(&hi3620_touch_i2c_diag_work,
