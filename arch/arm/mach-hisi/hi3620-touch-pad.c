@@ -25,7 +25,11 @@
 #define IOCG_NOPULL                    0x0
 #define IOCG_PULLUP                    0x1
 
-/* HI6421 regulator control registers from the vendor PMIC driver. */
+/*
+ * HI6421's in-tree regmap is reg_stride=4, val_bits=8.  The PMIC control
+ * registers therefore live four bytes apart but must be accessed as bytes;
+ * 32-bit writel() here can touch neighbouring PMIC registers.
+ */
 #define PMU_LDO5_CTRL                  (0x25 << 2)
 #define PMU_LDO13_CTRL                 (0x2d << 2)
 #define PMU_LDO_ENABLE                 0x10
@@ -46,10 +50,10 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
         void __iomem *pmu;
         u32 cfg156;
         u32 cfg157;
-        u32 ldo5_old;
-        u32 ldo13_old;
-        u32 ldo5_new;
-        u32 ldo13_new;
+        u8 ldo5_old;
+        u8 ldo13_old;
+        u8 ldo5_new;
+        u8 ldo13_new;
         u8 dir;
         u8 attn;
 
@@ -70,60 +74,55 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
                 return -ENOMEM;
         }
 
-        /*
-         * Match the stock touchscreen supplies before releasing reset.
-         * LDO5 table index 1 is 1.8 V; LDO13 table index 6 is 2.85 V.
-         * The vendor touchscreen helper writes 0x16 to LDO13 directly.
-         * Preserve unrelated PMIC bits and only replace enable/vsel fields.
-         */
-        ldo5_old = readl(pmu + PMU_LDO5_CTRL);
-        ldo13_old = readl(pmu + PMU_LDO13_CTRL);
+        /* Stock RMI4 rails: LDO5/ts-vbus=1.8 V, LDO13/ts-vdd=2.85 V. */
+        ldo5_old = readb(pmu + PMU_LDO5_CTRL);
+        ldo13_old = readb(pmu + PMU_LDO13_CTRL);
         ldo5_new = (ldo5_old & ~PMU_LDO_CTRL_MASK) |
                    PMU_LDO_ENABLE | PMU_LDO5_1V8;
         ldo13_new = (ldo13_old & ~PMU_LDO_CTRL_MASK) |
                     PMU_LDO_ENABLE | PMU_LDO13_2V85;
-        writel(ldo5_new, pmu + PMU_LDO5_CTRL);
-        writel(ldo13_new, pmu + PMU_LDO13_CTRL);
-        msleep(5);
+        writeb(ldo5_new, pmu + PMU_LDO5_CTRL);
+        writeb(ldo13_new, pmu + PMU_LDO13_CTRL);
+        mb();
+        msleep(10);
 
-        pr_info("HI3620-TOUCH-PWR: ldo5=%08x->%08x ldo13=%08x->%08x\n",
-                ldo5_old, readl(pmu + PMU_LDO5_CTRL),
-                ldo13_old, readl(pmu + PMU_LDO13_CTRL));
+        pr_info("HI3620-TOUCH-PWR: ldo5=%02x->%02x ldo13=%02x->%02x\n",
+                ldo5_old, readb(pmu + PMU_LDO5_CTRL),
+                ldo13_old, readb(pmu + PMU_LDO13_CTRL));
 
         cfg156 = readl(iocfg + IOCG_GPIO156);
         cfg157 = readl(iocfg + IOCG_GPIO157);
-        dir = readb(gpio + PL061_GPIODIR);
 
-        /* Match Huawei ts_es NORMAL: reset=Nopull, ATTN=Pullup. */
-        cfg156 &= ~IOCG_PULL_MASK;
-        cfg156 |= IOCG_NOPULL;
+        /* Huawei touchscreen NORMAL state: reset=no-pull, ATTN=pull-up. */
+        cfg156 = (cfg156 & ~IOCG_PULL_MASK) | IOCG_NOPULL;
+        cfg157 = (cfg157 & ~IOCG_PULL_MASK) | IOCG_PULLUP;
         writel(cfg156, iocfg + IOCG_GPIO156);
-
-        cfg157 &= ~IOCG_PULL_MASK;
-        cfg157 |= IOCG_PULLUP;
         writel(cfg157, iocfg + IOCG_GPIO157);
 
-        /* Stock GPIO setup: reset is output, ATTN is input. */
+        /* Reset is output; active-low ATTN is input. */
+        dir = readb(gpio + PL061_GPIODIR);
         dir |= BIT(TOUCH_RESET_PIN);
         dir &= ~BIT(TOUCH_ATTN_PIN);
         writeb(dir, gpio + PL061_GPIODIR);
 
-        /* Power is stable now: perform the stock-style reset pulse. */
+        /* Match the vendor 100 ms reset/startup delay conservatively. */
         writeb(0, gpio + PL061_DATA(TOUCH_RESET_PIN));
         msleep(100);
         writeb(BIT(TOUCH_RESET_PIN), gpio + PL061_DATA(TOUCH_RESET_PIN));
         msleep(100);
 
         attn = readb(gpio + PL061_DATA(TOUCH_ATTN_PIN));
-        pr_info("HI3620-TOUCH-PAD: iocg156=%08x iocg157=%08x dir=%02x rst=%u attn=%u\n",
-                readl(iocfg + IOCG_GPIO156), readl(iocfg + IOCG_GPIO157),
+        pr_info("HI3620-TOUCH-PAD: dir=%02x rst=%u attn=%u pull=%08x/%08x\n",
                 readb(gpio + PL061_GPIODIR),
                 !!(readb(gpio + PL061_DATA(TOUCH_RESET_PIN)) & BIT(TOUCH_RESET_PIN)),
-                !!(attn & BIT(TOUCH_ATTN_PIN)));
+                !!(attn & BIT(TOUCH_ATTN_PIN)),
+                readl(iocfg + IOCG_GPIO156), readl(iocfg + IOCG_GPIO157));
 
         iounmap(pmu);
         iounmap(gpio);
         iounmap(iocfg);
         return 0;
 }
-subsys_initcall(hi3620_mediapad_touch_pad_prepare);
+
+/* Must run before the DesignWare I2C platform driver's subsys_initcall. */
+postcore_initcall(hi3620_mediapad_touch_pad_prepare);
