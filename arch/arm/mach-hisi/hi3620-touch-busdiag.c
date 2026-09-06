@@ -2,11 +2,10 @@
 /*
  * Huawei MediaPad 10 FHD touchscreen bus isolation diagnostic.
  *
- * The GPIO bitbang tests showed both I2C2 lines stuck low even after the
- * Hi3620's internal pull-ups were enabled.  Run one controlled reset/power
- * isolation sequence before i2c-gpio probes so we can tell whether the
- * Synaptics controller itself is clamping SCL/SDA or the fault is elsewhere
- * in the pad/board path.
+ * Keep one deterministic pre-probe power cycle for the Synaptics controller.
+ * GPIO61_TP1V8_EN is part of the touchscreen power tree and must participate
+ * in that cycle; leaving it high while only LDO5/LDO13 are cycled can leave
+ * the controller partially powered and preserve a bad analog/runtime state.
  */
 
 #include <linux/bitops.h>
@@ -24,13 +23,16 @@
 #define HI3620_PMUSPI_PHYS             0xfcc00000
 #define HI3620_MAP_SIZE                0x1000
 
+#define IOMG24_TP1V8_EN                0x060
 #define IOMG26_I2C2_SCL                0x068
 #define IOMG27_I2C2_SDA                0x06c
 #define IOMG_GPIO_FUNC                 0x1
 
+#define IOCG_TP1V8_EN                  0x110
 #define IOCG_I2C2_SCL                  0x118
 #define IOCG_I2C2_SDA                  0x11c
 #define IOCG_PULL_MASK                 0x3
+#define IOCG_NOPULL                    0x0
 #define IOCG_PULLUP                    0x1
 
 #define PMU_LDO5_CTRL                  (0x25 << 2)
@@ -43,6 +45,7 @@
 
 #define PL061_GPIODIR                  0x400
 #define PL061_DATA(pin)                (BIT(pin) << 2)
+#define TP1V8_EN_PIN                   5       /* GPIO61  = GPIO7_5 */
 #define TOUCH_RESET_PIN                4       /* GPIO156 = GPIO19_4 */
 #define TOUCH_ATTN_PIN                 5       /* GPIO157 = GPIO19_5 */
 #define I2C2_SCL_PIN                   7       /* GPIO63  = GPIO7_7 */
@@ -65,6 +68,23 @@ static void hi3620_touch_bus_release(void __iomem *gpio7, void __iomem *gpio8)
         mb();
 }
 
+static void hi3620_touch_1v8_set(void __iomem *iomux,
+                                 void __iomem *iocfg,
+                                 void __iomem *gpio7,
+                                 bool on)
+{
+        u8 dir7;
+
+        writel(IOMG_GPIO_FUNC, iomux + IOMG24_TP1V8_EN);
+        writel((readl(iocfg + IOCG_TP1V8_EN) & ~IOCG_PULL_MASK) |
+               IOCG_NOPULL, iocfg + IOCG_TP1V8_EN);
+        dir7 = readb(gpio7 + PL061_GPIODIR) | BIT(TP1V8_EN_PIN);
+        writeb(dir7, gpio7 + PL061_GPIODIR);
+        writeb(on ? BIT(TP1V8_EN_PIN) : 0,
+               gpio7 + PL061_DATA(TP1V8_EN_PIN));
+        mb();
+}
+
 static void hi3620_touch_iso_log(const char *phase,
                                   void __iomem *iomux,
                                   void __iomem *iocfg,
@@ -73,8 +93,9 @@ static void hi3620_touch_iso_log(const char *phase,
                                   void __iomem *gpio19,
                                   void __iomem *pmu)
 {
-        pr_info("HI3620-TOUCH-ISO[%s]: mux=%08x/%08x pad=%08x/%08x dir7=%02x dir8=%02x dir19=%02x rst=%u attn=%u ldo5=%02x ldo13=%02x scl=%u sda=%u\n",
+        pr_info("HI3620-TOUCH-ISO[%s]: tp1v8=%u mux=%08x/%08x pad=%08x/%08x dir7=%02x dir8=%02x dir19=%02x rst=%u attn=%u ldo5=%02x ldo13=%02x scl=%u sda=%u\n",
                 phase,
+                hi3620_line(gpio7, TP1V8_EN_PIN),
                 readl(iomux + IOMG26_I2C2_SCL),
                 readl(iomux + IOMG27_I2C2_SDA),
                 readl(iocfg + IOCG_I2C2_SCL),
@@ -137,50 +158,50 @@ static int __init hi3620_mediapad_touch_bus_isolation(void)
         hi3620_touch_iso_log("powered-reset-high", iomux, iocfg,
                              gpio7, gpio8, gpio19, pmu);
 
-        /*
-         * First isolate reset only.  A correctly reset I2C slave must not
-         * permanently clamp both open-drain bus wires low.
-         */
+        /* Assert reset before removing any touchscreen supply. */
         writeb(0, gpio19 + PL061_DATA(TOUCH_RESET_PIN));
         mb();
         msleep(20);
         hi3620_touch_bus_release(gpio7, gpio8);
-        udelay(100);
         hi3620_touch_iso_log("reset-low", iomux, iocfg,
                              gpio7, gpio8, gpio19, pmu);
 
-        /*
-         * Then remove both touch rails while RESET remains asserted.  Power
-         * down in the reverse of Huawei's enable order: VBUS/LDO5 first,
-         * then VDD/LDO13.  The SoC internal pull-ups remain enabled, so this
-         * distinguishes a powered device clamp from the SoC/board pad path.
-         */
         ldo5_on = (readb(pmu + PMU_LDO5_CTRL) & ~PMU_LDO_CTRL_MASK) |
                   PMU_LDO_ENABLE | PMU_LDO5_1V8;
         ldo13_on = (readb(pmu + PMU_LDO13_CTRL) & ~PMU_LDO_CTRL_MASK) |
                    PMU_LDO_ENABLE | PMU_LDO13_2V85;
 
+        /*
+         * True cold cycle: first disable GPIO61_TP1V8_EN, then VBUS/LDO5,
+         * then VDD/LDO13.  Keep RESET asserted throughout and allow enough
+         * discharge time to clear any partially-powered analog state.
+         */
+        hi3620_touch_1v8_set(iomux, iocfg, gpio7, false);
+        udelay(100);
         writeb(ldo5_on & ~PMU_LDO_ENABLE, pmu + PMU_LDO5_CTRL);
         mb();
         udelay(100);
         writeb(ldo13_on & ~PMU_LDO_ENABLE, pmu + PMU_LDO13_CTRL);
         mb();
-        msleep(20);
+        msleep(100);
         hi3620_touch_bus_release(gpio7, gpio8);
-        udelay(100);
-        hi3620_touch_iso_log("rails-off-reset-low", iomux, iocfg,
+        hi3620_touch_iso_log("all-power-off-reset-low", iomux, iocfg,
                              gpio7, gpio8, gpio19, pmu);
 
-        /* Repower exactly in Huawei order: VDD first, then VBUS. */
+        /*
+         * Repower in Huawei rail order.  GPIO61 is enabled only after both
+         * regulator rails are valid, before the final hardware reset release.
+         */
         writeb(ldo13_on, pmu + PMU_LDO13_CTRL);
         mb();
         udelay(100);
         writeb(ldo5_on, pmu + PMU_LDO5_CTRL);
         mb();
         msleep(5);
+        hi3620_touch_1v8_set(iomux, iocfg, gpio7, true);
+        msleep(5);
         hi3620_touch_bus_release(gpio7, gpio8);
-        udelay(100);
-        hi3620_touch_iso_log("repowered-reset-low", iomux, iocfg,
+        hi3620_touch_iso_log("all-power-on-reset-low", iomux, iocfg,
                              gpio7, gpio8, gpio19, pmu);
 
         /* Match stock reset and leave the device ready for i2c-gpio probe. */
@@ -190,8 +211,7 @@ static int __init hi3620_mediapad_touch_bus_isolation(void)
         mb();
         msleep(100);
         hi3620_touch_bus_release(gpio7, gpio8);
-        udelay(100);
-        hi3620_touch_iso_log("repowered-reset-high", iomux, iocfg,
+        hi3620_touch_iso_log("all-power-on-reset-high", iomux, iocfg,
                              gpio7, gpio8, gpio19, pmu);
 
 out:
