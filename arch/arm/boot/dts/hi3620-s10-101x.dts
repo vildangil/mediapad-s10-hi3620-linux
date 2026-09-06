@@ -66,10 +66,10 @@
 	};
 
 	/*
-	 * Some K3V2 board revisions route touch through I2C1.  Keep a second
-	 * Synaptics RMI4 client here while bringing up this exact tablet so a
-	 * board-revision difference does not leave fbkeyboard without EV_ABS.
-	 * The helper in mach-hisi applies Huawei's I2C1 reset/SDA-delay setup.
+	 * Keep I2C1 described for later board bring-up, but the current tablet
+	 * has now been electrically narrowed down to the stock I2C2 path.  Do
+	 * not instantiate a second fake RMI client here: it only creates probe
+	 * noise and cannot be the touchscreen on this unit.
 	 */
 	i2c1: i2c@fcb09000 {
 		compatible = "snps,designware-i2c";
@@ -83,14 +83,6 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		status = "okay";
-
-		touchscreen@70 {
-			compatible = "syna,rmi4-i2c";
-			reg = <0x70>;
-			interrupt-parent = <&gpio19>;
-			interrupts = <5 8>;
-			syna,startup-delay-ms = <100>;
-		};
 	};
 
 	/*
@@ -98,10 +90,6 @@
 	 * Hi3620 I2C2 is a Synopsys DesignWare master at 0xfcb0c000, GIC SPI
 	 * 62. The stock touchscreen uses address 0x70 and attention on GPIO157
 	 * (GPIO19 pin 5, active low). GPIO156 is reset.
-	 *
-	 * Huawei's actual K3V2 iomux table defines GPIO63/GPIO64 as
-	 * i2c2_scl/i2c2_sda with FUNC1 on IOMG26/IOMG27.  Earlier bring-up used
-	 * function 0 here, which leaves the DesignWare controller timing out.
 	 */
 	i2c2: i2c@fcb0c000 {
 		compatible = "snps,designware-i2c";
@@ -213,15 +201,27 @@
 	};
 };
 
-/* GPIO156/GPIO157 are dedicated GPIO pads in Huawei's iomux database and do
+/*
+ * GPIO156/GPIO157 are dedicated GPIO pads in Huawei's iomux database and do
  * not have IOMG selectors.  The generic hi3620.dtsi gpio-ranges table only
- * describes GPIO19 pins 0..3; leaving the property present makes PL061 call
- * pinctrl for pins 4/5 and rejects the touchscreen IRQ/reset requests.  On
- * this board let PL061 own GPIO19 directly and retain the bootloader pad
- * configuration.
+ * describes GPIO19 pins 0..3, so let PL061 own this bank directly.
+ *
+ * More importantly, the late diagnostic on the real tablet showed GPIO156
+ * losing its output direction (dir changed from 0x12 to 0x02), which leaves
+ * the Synaptics controller held in reset and turns the formerly hanging I2C2
+ * bus into a clean NACK.  A GPIO hog is the right lifetime model here: the
+ * stock RMI transport never owns the reset line itself, so keep reset high
+ * for the whole boot after the early stock-style pulse in hi3620-touch-pad.c.
  */
 &gpio19 {
 	/delete-property/ gpio-ranges;
+
+	touch_reset_hog: touch-reset-hog {
+		gpio-hog;
+		gpios = <4 0>;
+		output-high;
+		line-name = "touch-reset";
+	};
 };
 
 &dual_timer0 {
