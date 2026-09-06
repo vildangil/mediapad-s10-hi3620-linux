@@ -26,12 +26,21 @@
 
 #define HI3620_SCTRL_PHYS              0xfc802000
 #define HI3620_IOMUX_PHYS              0xfc803000
+#define HI3620_IOCFG_PHYS              0xfc803800
 #define HI3620_PCTRL_PHYS              0xfca09000
 #define HI3620_I2C1_PHYS               0xfcb09000
+#define HI3620_GPIO19_PHYS             0xfc819000
 #define HI3620_MAP_SIZE                0x1000
 
 #define IOMG46_I2C1                    0x0b8
 #define IOMG46_FUNC_I2C1               0x1
+
+#define IOCG_GPIO156                   0x00c
+#define IOCG_GPIO157                   0x010
+#define PL061_GPIODIR                  0x400
+#define PL061_DATA(pin)                (BIT(pin) << 2)
+#define TOUCH_RESET_PIN                4
+#define TOUCH_ATTN_PIN                 5
 
 #define SCTRL_I2C_RST_EN               0x098
 #define SCTRL_I2C_RST_DIS              0x09c
@@ -46,6 +55,7 @@
 #define DW_IC_COMP_VERSION             0x0f8
 #define DW_IC_COMP_TYPE                0x0fc
 
+static unsigned int hi3620_touch_scan_count;
 static void hi3620_touch_scan_workfn(struct work_struct *work);
 static DECLARE_DELAYED_WORK(hi3620_touch_scan_work,
                             hi3620_touch_scan_workfn);
@@ -122,8 +132,12 @@ static int __init hi3620_mediapad_i2c1_prepare(void)
         iounmap(iomux);
         iounmap(sctrl);
 
-        /* Scan after the I2C core and OF clients have had time to probe. */
-        schedule_delayed_work(&hi3620_touch_scan_work, 12 * HZ);
+        /*
+         * Print the actual bus/GPIO state after userspace has nearly reached
+         * login.  Earlier bring-up messages scroll off fbcon too quickly to be
+         * useful from a photo.  Repeat three times at 30 second intervals.
+         */
+        schedule_delayed_work(&hi3620_touch_scan_work, 60 * HZ);
         return 0;
 }
 postcore_initcall(hi3620_mediapad_i2c1_prepare);
@@ -142,6 +156,8 @@ static void hi3620_touch_scan_workfn(struct work_struct *work)
         static const u8 addrs[] = { 0x70, 0x4a, 0x4b, 0x1a };
         struct i2c_adapter *adap;
         struct i2c_msg msg;
+        void __iomem *iocfg;
+        void __iomem *gpio;
         u8 value;
         int nr;
         int i;
@@ -150,15 +166,35 @@ static void hi3620_touch_scan_workfn(struct work_struct *work)
         if (!of_machine_is_compatible("huawei,s10-101x"))
                 return;
 
+        iocfg = ioremap(HI3620_IOCFG_PHYS, HI3620_MAP_SIZE);
+        gpio = ioremap(HI3620_GPIO19_PHYS, HI3620_MAP_SIZE);
+        if (iocfg && gpio) {
+                pr_info("HI3620-TOUCH-LATE[%u]: iocg156=%08x iocg157=%08x dir=%02x rst=%u attn=%u\n",
+                        hi3620_touch_scan_count,
+                        readl(iocfg + IOCG_GPIO156),
+                        readl(iocfg + IOCG_GPIO157),
+                        readb(gpio + PL061_GPIODIR),
+                        !!(readb(gpio + PL061_DATA(TOUCH_RESET_PIN)) & BIT(TOUCH_RESET_PIN)),
+                        !!(readb(gpio + PL061_DATA(TOUCH_ATTN_PIN)) & BIT(TOUCH_ATTN_PIN)));
+        } else {
+                pr_err("HI3620-TOUCH-LATE[%u]: failed to map IOCG/GPIO19\n",
+                       hi3620_touch_scan_count);
+        }
+        if (gpio)
+                iounmap(gpio);
+        if (iocfg)
+                iounmap(iocfg);
+
         for (nr = 0; nr < 4; nr++) {
                 adap = i2c_get_adapter(nr);
                 if (!adap) {
-                        pr_info("HI3620-TOUCH-SCAN: i2c-%d absent\n", nr);
+                        pr_info("HI3620-TOUCH-SCAN[%u]: i2c-%d absent\n",
+                                hi3620_touch_scan_count, nr);
                         continue;
                 }
 
-                pr_info("HI3620-TOUCH-SCAN: i2c-%d name='%s'\n",
-                        nr, adap->name);
+                pr_info("HI3620-TOUCH-SCAN[%u]: i2c-%d name='%s'\n",
+                        hi3620_touch_scan_count, nr, adap->name);
 
                 for (i = 0; i < ARRAY_SIZE(addrs); i++) {
                         value = 0;
@@ -169,10 +205,15 @@ static void hi3620_touch_scan_workfn(struct work_struct *work)
                         msg.buf = &value;
                         ret = i2c_transfer(adap, &msg, 1);
 
-                        pr_info("HI3620-TOUCH-SCAN: i2c-%d addr=0x%02x ret=%d byte=%02x\n",
-                                nr, addrs[i], ret, value);
+                        pr_info("HI3620-TOUCH-SCAN[%u]: i2c-%d addr=0x%02x ret=%d byte=%02x\n",
+                                hi3620_touch_scan_count, nr,
+                                addrs[i], ret, value);
                 }
 
                 i2c_put_adapter(adap);
         }
+
+        hi3620_touch_scan_count++;
+        if (hi3620_touch_scan_count < 3)
+                schedule_delayed_work(&hi3620_touch_scan_work, 30 * HZ);
 }
