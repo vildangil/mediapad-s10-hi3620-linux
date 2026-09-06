@@ -42,6 +42,20 @@
 #define SCTRL_I2C_RST_STAT             0x0a0
 #define I2C2_RESET_BIT                 BIT(28)
 
+/*
+ * Vendor K3V2 clocks I2C2 from clk_cfgaxi.  On CS silicon its clk_cfgaxi
+ * enable callback actively programs SCTRL DIV_REG0 before consumers run:
+ * select PLL2, then set cfgaxi to PLL2 / 30 = 48 MHz.  The upstream Hi3620
+ * clock description only models the 48 MHz rate and does not reproduce these
+ * hardware writes, so make them explicitly for this board during bring-up.
+ * Both values use the HiSilicon high-half write-mask convention.
+ */
+#define SCTRL_CLK_DIV0                 0x100
+#define SCTRL_CLK_GATE_STAT2           0x048
+#define CFGAXI_SEL_PLL2                0x80008000
+#define CFGAXI_NORMAL_DIV_CS           0x007f002e
+#define I2C2_CLK_GATE_BIT              BIT(28)
+
 /* Vendor 300 ns SDA-delay write-mask/value command for I2C2. */
 #define PCTRL_I2C23_DELAY              0x00c
 #define I2C2_ENABLE_DELAY_SDA          0x00100010
@@ -65,10 +79,47 @@
 #define PL061_DATA(pin)                (BIT(pin) << 2)
 #define LCD_POWER_PIN                  3
 
+#define I2C_CLK_DIAG_SAMPLES           60
+#define I2C_CLK_DIAG_PERIOD_MS         50
+#define I2C_CLK_DIAG_START_MS          4000
+
+static unsigned int i2c_clk_diag_count;
 static unsigned int bl_watch_count;
+static void hi3620_mediapad_i2c_clk_watch(struct work_struct *work);
 static void hi3620_mediapad_backlight_watch(struct work_struct *work);
+static DECLARE_DELAYED_WORK(hi3620_i2c_clk_watch_work,
+                            hi3620_mediapad_i2c_clk_watch);
 static DECLARE_DELAYED_WORK(hi3620_bl_watch_work,
                             hi3620_mediapad_backlight_watch);
+
+static void hi3620_mediapad_i2c_clk_watch(struct work_struct *work)
+{
+        void __iomem *sctrl;
+        u32 clkstat;
+
+        (void)work;
+
+        if (!of_machine_is_compatible("huawei,s10-101x"))
+                return;
+
+        sctrl = ioremap(HI3620_SCTRL_PHYS, HI3620_MAP_SIZE);
+        if (!sctrl)
+                return;
+
+        clkstat = readl(sctrl + SCTRL_CLK_GATE_STAT2);
+        pr_info("HI3620-I2C2-CLK[%u]: div0=%08x clkstat2=%08x gate=%u rst=%08x\n",
+                i2c_clk_diag_count,
+                readl(sctrl + SCTRL_CLK_DIV0), clkstat,
+                !!(clkstat & I2C2_CLK_GATE_BIT),
+                readl(sctrl + SCTRL_I2C_RST_STAT));
+
+        iounmap(sctrl);
+
+        i2c_clk_diag_count++;
+        if (i2c_clk_diag_count < I2C_CLK_DIAG_SAMPLES)
+                schedule_delayed_work(&hi3620_i2c_clk_watch_work,
+                                      msecs_to_jiffies(I2C_CLK_DIAG_PERIOD_MS));
+}
 
 static int __init hi3620_mediapad_i2c2_prepare(void)
 {
@@ -78,6 +129,8 @@ static int __init hi3620_mediapad_i2c2_prepare(void)
         void __iomem *i2c;
         u32 stat;
         u32 pad;
+        u32 div0_before;
+        u32 div0_after;
         unsigned int timeout;
 
         if (!of_machine_is_compatible("huawei,s10-101x"))
@@ -99,6 +152,13 @@ static int __init hi3620_mediapad_i2c2_prepare(void)
                         iounmap(sctrl);
                 return -ENOMEM;
         }
+
+        /* Mirror vendor k3v2_cfgaxi_clk_enable() for CS silicon. */
+        div0_before = readl(sctrl + SCTRL_CLK_DIV0);
+        writel(CFGAXI_SEL_PLL2, sctrl + SCTRL_CLK_DIV0);
+        writel(CFGAXI_NORMAL_DIV_CS, sctrl + SCTRL_CLK_DIV0);
+        mb();
+        div0_after = readl(sctrl + SCTRL_CLK_DIV0);
 
         /* Match the upstream/vendor NORMAL state: function 0, no pulls. */
         writel(IOMG_I2C_FUNC, iomux + IOMG26_I2C2_SCL);
@@ -133,13 +193,20 @@ static int __init hi3620_mediapad_i2c2_prepare(void)
         writel(I2C2_ENABLE_DELAY_SDA, pctrl + PCTRL_I2C23_DELAY);
         udelay(10);
 
-        pr_info("HI3620-I2C2: mux=%08x/%08x pad=%08x/%08x rst=%08x comp=%08x ver=%08x\n",
+        pr_info("HI3620-I2C2: cfgaxi=%08x->%08x clkstat2=%08x mux=%08x/%08x pad=%08x/%08x rst=%08x comp=%08x ver=%08x\n",
+                div0_before, div0_after,
+                readl(sctrl + SCTRL_CLK_GATE_STAT2),
                 readl(iomux + IOMG26_I2C2_SCL),
                 readl(iomux + IOMG27_I2C2_SDA),
                 readl(iomux + IOCG79_I2C2_SCL),
                 readl(iomux + IOCG80_I2C2_SDA),
                 readl(sctrl + SCTRL_I2C_RST_STAT),
                 readl(i2c + DW_IC_COMP_TYPE), readl(i2c + DW_IC_COMP_VERSION));
+
+        /* Catch the real deferred-probe RMI transfer and its I2C2 gate state. */
+        i2c_clk_diag_count = 0;
+        schedule_delayed_work(&hi3620_i2c_clk_watch_work,
+                              msecs_to_jiffies(I2C_CLK_DIAG_START_MS));
 
         iounmap(i2c);
         iounmap(pctrl);
