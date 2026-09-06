@@ -86,35 +86,33 @@ static void hi3620_mediapad_touch_bitbang_prepare(void)
         writel(IOMG_GPIO_FUNC, iomux + IOMG27_I2C2_SDA);
 
         /*
-         * Huawei's generated CS low-power/GPIO state for gpio_063_cs and
-         * gpio_064_cs is FUNC1 + NOPULL + input.  Do not inherit the pin
-         * descriptors' reset-time PULLDOWN here: a pulldown would hold an
-         * open-drain I2C line low and make the bitbang test meaningless.
+         * Stock uses NOPULL for normal I2C2, but the previous GPIO diagnostic
+         * proved that with FUNC1 + NOPULL both released lines stay at logic 0.
+         * Force the SoC's weak internal pull-ups for this diagnostic.  This is
+         * electrically safe for open-drain I2C and tells us whether the low
+         * level is simply caused by missing/unpowered external pull-ups or by
+         * something actively clamping the bus low.
          */
         scl_pad_old = readl(iocfg + IOCG_I2C2_SCL);
         sda_pad_old = readl(iocfg + IOCG_I2C2_SDA);
-        writel((scl_pad_old & ~IOCG_PULL_MASK) | IOCG_NOPULL,
+        writel((scl_pad_old & ~IOCG_PULL_MASK) | IOCG_PULLUP,
                iocfg + IOCG_I2C2_SCL);
-        writel((sda_pad_old & ~IOCG_PULL_MASK) | IOCG_NOPULL,
+        writel((sda_pad_old & ~IOCG_PULL_MASK) | IOCG_PULLUP,
                iocfg + IOCG_I2C2_SDA);
         mb();
 
-        /*
-         * Release both lines.  i2c-gpio emulates open-drain signaling by
-         * switching each PL061 pin between input (logic high via the board's
-         * external pull-up) and output-low.
-         */
+        /* Release both lines for open-drain bitbanging. */
         dir7 = readb(gpio7 + PL061_GPIODIR) & ~BIT(I2C2_SCL_PIN);
         dir8 = readb(gpio8 + PL061_GPIODIR) & ~BIT(I2C2_SDA_PIN);
         writeb(dir7, gpio7 + PL061_GPIODIR);
         writeb(dir8, gpio8 + PL061_GPIODIR);
         mb();
-        udelay(20);
+        udelay(100);
 
         scl = !!(readb(gpio7 + PL061_DATA(I2C2_SCL_PIN)) & BIT(I2C2_SCL_PIN));
         sda = !!(readb(gpio8 + PL061_DATA(I2C2_SDA_PIN)) & BIT(I2C2_SDA_PIN));
 
-        pr_info("HI3620-TOUCH-BITBANG: mux=%08x/%08x pad=%08x->%08x/%08x->%08x dir=%02x/%02x released scl=%u sda=%u\n",
+        pr_info("HI3620-TOUCH-BITBANG-PULLUP: mux=%08x/%08x pad=%08x->%08x/%08x->%08x dir=%02x/%02x released scl=%u sda=%u\n",
                 readl(iomux + IOMG26_I2C2_SCL),
                 readl(iomux + IOMG27_I2C2_SDA),
                 scl_pad_old, readl(iocfg + IOCG_I2C2_SCL),
