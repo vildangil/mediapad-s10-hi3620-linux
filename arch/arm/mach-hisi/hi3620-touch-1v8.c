@@ -88,5 +88,5 @@ out:
         return 0;
 }
 
-/* Run after the existing postcore touch setup and before arch bus diagnostics. */
-postcore_initcall(hi3620_mediapad_touch_1v8_enable);
+/* GPIO61 must be high before the postcore touch rail/reset sequence runs. */
+core_initcall(hi3620_mediapad_touch_1v8_enable);
