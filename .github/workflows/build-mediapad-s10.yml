@@ -77,6 +77,24 @@ jobs:
           grep -n '\.section "\.start"' arch/arm/boot/compressed/head.S
           grep -n '\.piggydata' arch/arm/boot/compressed/piggy.S
 
+          # Linux 4.9/4.14 RMI4 F11 has a real address typo: after reading
+          # F11 controls from control_base_addr it writes the block back to
+          # query_base_addr. Later kernels use control_base_addr. Apply that
+          # upstream fix to the build until the old source is rebased/cleaned.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('drivers/input/rmi4/rmi_f11.c')
+          s = p.read_text()
+          old = '&f11->dev_controls, fn->fd.query_base_addr);'
+          new = '&f11->dev_controls, fn->fd.control_base_addr);'
+          count = s.count(old)
+          if count != 2:
+              raise SystemExit(f'expected 2 F11 control-base typos, found {count}')
+          p.write_text(s.replace(old, new))
+          PY
+          grep -n 'f11_write_control_regs' drivers/input/rmi4/rmi_f11.c
+          grep -n 'dev_controls, fn->fd.control_base_addr' drivers/input/rmi4/rmi_f11.c
+
       - name: Configure MediaPad Hi3620 kernel
         run: |
           mkdir -p out
