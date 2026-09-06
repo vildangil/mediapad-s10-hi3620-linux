@@ -14,7 +14,12 @@
 #include <linux/of.h>
 #include <linux/printk.h>
 
+#define HI3620_IOMUX_PHYS              0xfc803000
 #define HI3620_IOCFG_PHYS              0xfc803800
+#define HI3620_SCTRL_PHYS              0xfc802000
+#define HI3620_PCTRL_PHYS              0xfca09000
+#define HI3620_GPIO7_PHYS              0xfc80d000
+#define HI3620_GPIO8_PHYS              0xfc80e000
 #define HI3620_GPIO19_PHYS             0xfc819000
 #define HI3620_PMUSPI_PHYS             0xfcc00000
 #define HI3620_MAP_SIZE                0x1000
@@ -24,6 +29,20 @@
 #define IOCG_PULL_MASK                 0x3
 #define IOCG_NOPULL                    0x0
 #define IOCG_PULLUP                    0x1
+
+/* I2C2 mux/pads from Huawei block_i2c2. NORMAL is FUNC0, GPIO/idle is FUNC1. */
+#define IOMG26_I2C2_SCL                0x068
+#define IOMG27_I2C2_SDA                0x06c
+#define IOMG_I2C_FUNC                  0x0
+#define IOMG_GPIO_FUNC                 0x1
+
+/* Vendor I2C2 controller reset + 300 ns SDA delay. */
+#define SCTRL_I2C_RST_EN               0x098
+#define SCTRL_I2C_RST_DIS              0x09c
+#define SCTRL_I2C_RST_STAT             0x0a0
+#define I2C2_RESET_BIT                 BIT(28)
+#define PCTRL_I2C23_DELAY              0x00c
+#define I2C2_ENABLE_DELAY_SDA          0x00100010
 
 /*
  * HI6421's in-tree regmap is reg_stride=4, val_bits=8.  The PMIC control
@@ -42,6 +61,99 @@
 #define PL061_DATA(pin)                (BIT(pin) << 2)
 #define TOUCH_RESET_PIN                4
 #define TOUCH_ATTN_PIN                 5
+#define I2C2_SCL_PIN                   7       /* GPIO63 = GPIO7_7 */
+#define I2C2_SDA_PIN                   0       /* GPIO64 = GPIO8_0 */
+
+static void hi3620_mediapad_i2c2_bus_recover(void)
+{
+        void __iomem *iomux;
+        void __iomem *gpio7;
+        void __iomem *gpio8;
+        void __iomem *sctrl;
+        void __iomem *pctrl;
+        u8 dir7;
+        u8 dir8;
+        u8 scl;
+        u8 sda;
+        u32 stat;
+        unsigned int timeout;
+
+        iomux = ioremap(HI3620_IOMUX_PHYS, HI3620_MAP_SIZE);
+        gpio7 = ioremap(HI3620_GPIO7_PHYS, HI3620_MAP_SIZE);
+        gpio8 = ioremap(HI3620_GPIO8_PHYS, HI3620_MAP_SIZE);
+        sctrl = ioremap(HI3620_SCTRL_PHYS, HI3620_MAP_SIZE);
+        pctrl = ioremap(HI3620_PCTRL_PHYS, HI3620_MAP_SIZE);
+        if (!iomux || !gpio7 || !gpio8 || !sctrl || !pctrl)
+                goto out;
+
+        /*
+         * Reproduce Huawei's I2C2_reset() sequence after the touchscreen is
+         * powered and released from reset: temporarily mux SCL/SDA as GPIO,
+         * pulse SCL low->high and force SDA high, then return to I2C FUNC0.
+         */
+        writel(IOMG_GPIO_FUNC, iomux + IOMG26_I2C2_SCL);
+        writel(IOMG_GPIO_FUNC, iomux + IOMG27_I2C2_SDA);
+        mb();
+
+        dir7 = readb(gpio7 + PL061_GPIODIR);
+        dir8 = readb(gpio8 + PL061_GPIODIR);
+        writeb(dir7 | BIT(I2C2_SCL_PIN), gpio7 + PL061_GPIODIR);
+        writeb(dir8 | BIT(I2C2_SDA_PIN), gpio8 + PL061_GPIODIR);
+
+        writeb(0, gpio7 + PL061_DATA(I2C2_SCL_PIN));
+        udelay(5);
+        writeb(BIT(I2C2_SCL_PIN), gpio7 + PL061_DATA(I2C2_SCL_PIN));
+        writeb(BIT(I2C2_SDA_PIN), gpio8 + PL061_DATA(I2C2_SDA_PIN));
+        udelay(5);
+
+        scl = !!(readb(gpio7 + PL061_DATA(I2C2_SCL_PIN)) & BIT(I2C2_SCL_PIN));
+        sda = !!(readb(gpio8 + PL061_DATA(I2C2_SDA_PIN)) & BIT(I2C2_SDA_PIN));
+
+        writel(IOMG_I2C_FUNC, iomux + IOMG26_I2C2_SCL);
+        writel(IOMG_I2C_FUNC, iomux + IOMG27_I2C2_SDA);
+        mb();
+
+        /* Reset the DesignWare controller once more after the bus recovery. */
+        writel(I2C2_RESET_BIT, sctrl + SCTRL_I2C_RST_EN);
+        timeout = 1000;
+        do {
+                stat = readl(sctrl + SCTRL_I2C_RST_STAT);
+                if (stat & I2C2_RESET_BIT)
+                        break;
+                udelay(1);
+        } while (--timeout);
+
+        udelay(2);
+        writel(I2C2_RESET_BIT, sctrl + SCTRL_I2C_RST_DIS);
+        timeout = 1000;
+        do {
+                stat = readl(sctrl + SCTRL_I2C_RST_STAT);
+                if (!(stat & I2C2_RESET_BIT))
+                        break;
+                udelay(1);
+        } while (--timeout);
+
+        writel(I2C2_ENABLE_DELAY_SDA, pctrl + PCTRL_I2C23_DELAY);
+        udelay(10);
+
+        pr_info("HI3620-TOUCH-I2C2: recovered scl=%u sda=%u mux=%08x/%08x rst=%08x\n",
+                scl, sda,
+                readl(iomux + IOMG26_I2C2_SCL),
+                readl(iomux + IOMG27_I2C2_SDA),
+                readl(sctrl + SCTRL_I2C_RST_STAT));
+
+out:
+        if (pctrl)
+                iounmap(pctrl);
+        if (sctrl)
+                iounmap(sctrl);
+        if (gpio8)
+                iounmap(gpio8);
+        if (gpio7)
+                iounmap(gpio7);
+        if (iomux)
+                iounmap(iomux);
+}
 
 static int __init hi3620_mediapad_touch_pad_prepare(void)
 {
@@ -117,6 +229,9 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
                 !!(readb(gpio + PL061_DATA(TOUCH_RESET_PIN)) & BIT(TOUCH_RESET_PIN)),
                 !!(attn & BIT(TOUCH_ATTN_PIN)),
                 readl(iocfg + IOCG_GPIO156), readl(iocfg + IOCG_GPIO157));
+
+        /* Stock platform data provides I2C2_reset(); perform that recovery now. */
+        hi3620_mediapad_i2c2_bus_recover();
 
         iounmap(pmu);
         iounmap(gpio);
