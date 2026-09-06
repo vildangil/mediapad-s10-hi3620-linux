@@ -11,8 +11,10 @@
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/io.h>
+#include <linux/jiffies.h>
 #include <linux/of.h>
 #include <linux/printk.h>
+#include <linux/workqueue.h>
 
 #define HI3620_IOMUX_PHYS              0xfc803000
 #define HI3620_IOCFG_PHYS              0xfc803800
@@ -22,6 +24,7 @@
 #define HI3620_GPIO8_PHYS              0xfc80e000
 #define HI3620_GPIO19_PHYS             0xfc819000
 #define HI3620_PMUSPI_PHYS             0xfcc00000
+#define HI3620_I2C2_PHYS               0xfcb0c000
 #define HI3620_MAP_SIZE                0x1000
 
 #define IOCG_GPIO156                   0x00c
@@ -44,6 +47,21 @@
 #define PCTRL_I2C23_DELAY              0x00c
 #define I2C2_ENABLE_DELAY_SDA          0x00100010
 
+/* DesignWare I2C registers used by the temporary touchscreen trace. */
+#define DW_IC_CON                       0x000
+#define DW_IC_TAR                       0x004
+#define DW_IC_SS_SCL_HCNT               0x014
+#define DW_IC_SS_SCL_LCNT               0x018
+#define DW_IC_FS_SCL_HCNT               0x01c
+#define DW_IC_FS_SCL_LCNT               0x020
+#define DW_IC_RAW_INTR_STAT             0x034
+#define DW_IC_ENABLE                    0x06c
+#define DW_IC_STATUS                    0x070
+#define DW_IC_TXFLR                     0x074
+#define DW_IC_RXFLR                     0x078
+#define DW_IC_TX_ABRT_SOURCE            0x080
+#define DW_IC_ENABLE_STATUS             0x09c
+
 /*
  * HI6421's in-tree regmap is reg_stride=4, val_bits=8.  The PMIC control
  * registers therefore live four bytes apart but must be accessed as bytes;
@@ -63,6 +81,52 @@
 #define TOUCH_ATTN_PIN                 5
 #define I2C2_SCL_PIN                   7       /* GPIO63 = GPIO7_7 */
 #define I2C2_SDA_PIN                   0       /* GPIO64 = GPIO8_0 */
+
+#define TOUCH_I2C_DIAG_SAMPLES         60
+#define TOUCH_I2C_DIAG_PERIOD_MS       50
+
+static struct delayed_work hi3620_touch_i2c_diag_work;
+static unsigned int hi3620_touch_i2c_diag_iter;
+
+static void hi3620_touch_i2c_diag_workfn(struct work_struct *work)
+{
+        void __iomem *i2c;
+        unsigned int n = hi3620_touch_i2c_diag_iter;
+
+        (void)work;
+
+        if (n >= TOUCH_I2C_DIAG_SAMPLES)
+                return;
+
+        i2c = ioremap(HI3620_I2C2_PHYS, HI3620_MAP_SIZE);
+        if (!i2c) {
+                pr_err("HI3620-TOUCH-I2C-DIAG: failed to map I2C2\n");
+                return;
+        }
+
+        pr_info("HI3620-TOUCH-I2C-DIAG[%u]: con=%08x tar=%08x ss=%08x/%08x fs=%08x/%08x raw=%08x en=%08x stat=%08x tx=%08x rx=%08x abrt=%08x enstat=%08x\n",
+                n,
+                readl(i2c + DW_IC_CON),
+                readl(i2c + DW_IC_TAR),
+                readl(i2c + DW_IC_SS_SCL_HCNT),
+                readl(i2c + DW_IC_SS_SCL_LCNT),
+                readl(i2c + DW_IC_FS_SCL_HCNT),
+                readl(i2c + DW_IC_FS_SCL_LCNT),
+                readl(i2c + DW_IC_RAW_INTR_STAT),
+                readl(i2c + DW_IC_ENABLE),
+                readl(i2c + DW_IC_STATUS),
+                readl(i2c + DW_IC_TXFLR),
+                readl(i2c + DW_IC_RXFLR),
+                readl(i2c + DW_IC_TX_ABRT_SOURCE),
+                readl(i2c + DW_IC_ENABLE_STATUS));
+
+        iounmap(i2c);
+
+        hi3620_touch_i2c_diag_iter = n + 1;
+        if (hi3620_touch_i2c_diag_iter < TOUCH_I2C_DIAG_SAMPLES)
+                schedule_delayed_work(&hi3620_touch_i2c_diag_work,
+                                      msecs_to_jiffies(TOUCH_I2C_DIAG_PERIOD_MS));
+}
 
 static void hi3620_mediapad_i2c2_bus_recover(void)
 {
@@ -199,17 +263,19 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
                 return -ENOMEM;
         }
 
-        /* Stock RMI4 rails: LDO5/ts-vbus=1.8 V, LDO13/ts-vdd=2.85 V. */
+        /* Stock RMI4 rails: VDD/LDO13=2.85 V first, VBUS/LDO5=1.8 V second. */
         ldo5_old = readb(pmu + PMU_LDO5_CTRL);
         ldo13_old = readb(pmu + PMU_LDO13_CTRL);
         ldo5_new = (ldo5_old & ~PMU_LDO_CTRL_MASK) |
                    PMU_LDO_ENABLE | PMU_LDO5_1V8;
         ldo13_new = (ldo13_old & ~PMU_LDO_CTRL_MASK) |
                     PMU_LDO_ENABLE | PMU_LDO13_2V85;
-        writeb(ldo5_new, pmu + PMU_LDO5_CTRL);
         writeb(ldo13_new, pmu + PMU_LDO13_CTRL);
+        writeb(ldo5_new, pmu + PMU_LDO5_CTRL);
         mb();
-        msleep(10);
+
+        /* Huawei's RMI4 probe waits 5 ms after enabling both supplies. */
+        msleep(5);
 
         pr_info("HI3620-TOUCH-PWR: ldo5=%02x->%02x ldo13=%02x->%02x\n",
                 ldo5_old, readb(pmu + PMU_LDO5_CTRL),
@@ -230,11 +296,10 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
         dir &= ~BIT(TOUCH_ATTN_PIN);
         writeb(dir, gpio + PL061_GPIODIR);
 
-        /* Match the vendor 100 ms reset/startup delay conservatively. */
+        /* Match Huawei gpio_config(): RESET low for 10 ms, then release high. */
         writeb(0, gpio + PL061_DATA(TOUCH_RESET_PIN));
-        msleep(100);
+        msleep(10);
         writeb(BIT(TOUCH_RESET_PIN), gpio + PL061_DATA(TOUCH_RESET_PIN));
-        msleep(100);
 
         attn = readb(gpio + PL061_DATA(TOUCH_ATTN_PIN));
         pr_info("HI3620-TOUCH-PAD: dir=%02x rst=%u attn=%u pull=%08x/%08x\n",
@@ -245,6 +310,17 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
 
         /* Stock platform data provides I2C2_reset(); perform that recovery now. */
         hi3620_mediapad_i2c2_bus_recover();
+
+        /*
+         * Temporary bring-up trace.  Sample I2C2 every 50 ms for three seconds
+         * so ramoops catches the controller immediately before, during and
+         * after the first RMI page-select transaction.
+         */
+        hi3620_touch_i2c_diag_iter = 0;
+        INIT_DELAYED_WORK(&hi3620_touch_i2c_diag_work,
+                          hi3620_touch_i2c_diag_workfn);
+        schedule_delayed_work(&hi3620_touch_i2c_diag_work,
+                              msecs_to_jiffies(TOUCH_I2C_DIAG_PERIOD_MS));
 
         iounmap(pmu);
         iounmap(gpio);
