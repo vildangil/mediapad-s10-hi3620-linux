@@ -27,21 +27,6 @@
 		status = "okay";
 	};
 
-	/*
-	 * Vendor K3V2 clocks the DesignWare I2C controllers from clk_cfgaxi,
-	 * which is 48 MHz on the CS silicon used by this tablet.  The upstream
-	 * Hi3620 gate metadata instead reports i2cclk2 as a 26 MHz pclk child.
-	 * Keep the real I2C2 gate as the parent, but correct the rate seen by the
-	 * DesignWare timing code: 26 MHz * 24 / 13 = 48 MHz.
-	 */
-	i2c2_timing_clk: i2c2-timing-clock {
-		compatible = "fixed-factor-clock";
-		clocks = <&clock HI3620_I2CCLK2>;
-		#clock-cells = <0>;
-		clock-mult = <24>;
-		clock-div = <13>;
-	};
-
 	usb_otg: usb@fd240000 {
 		compatible = "snps,dwc2";
 		reg = <0xfd240000 0x00040000>;
@@ -56,11 +41,7 @@
 		status = "okay";
 	};
 
-	/*
-	 * This tablet is the stock I2C2 Synaptics variant.  Keep the alternate
-	 * I2C1 controller disabled so it neither changes unused pads nor produces
-	 * misleading touch-probe noise.
-	 */
+	/* Alternate touchscreen controller/bus variant is not used on this tablet. */
 	i2c1: i2c@fcb09000 {
 		compatible = "snps,designware-i2c";
 		reg = <0xfcb09000 0x1000>;
@@ -74,19 +55,39 @@
 	};
 
 	/*
-	 * Stock board code places Synaptics RMI4 at 0x70 on physical I2C2.
-	 * Hi3620 I2C2 is DesignWare at 0xfcb0c000, GIC SPI62.  GPIO157 is
-	 * active-low ATTN and GPIO156 is reset.
+	 * Physical I2C2 DesignWare at 0xfcb0c000 is deliberately disabled for
+	 * this diagnostic boot.  It accepts the Synaptics page-select bytes into
+	 * TX FIFO but never starts the transfer.  The i2c-gpio adapter below uses
+	 * the exact same physical wires through GPIO63/GPIO64 instead.
 	 */
 	i2c2: i2c@fcb0c000 {
 		compatible = "snps,designware-i2c";
 		reg = <0xfcb0c000 0x1000>;
 		interrupt-parent = <&gic>;
 		interrupts = <0 62 4>;
-		clocks = <&i2c2_timing_clk>;
+		clocks = <&clock HI3620_I2CCLK2>;
 		clock-frequency = <100000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	/*
+	 * Diagnostic software I2C bus:
+	 *   SDA = GPIO64 = GPIO8_0
+	 *   SCL = GPIO63 = GPIO7_7
+	 *
+	 * Do not mark either GPIO as hardware-open-drain.  Linux i2c-gpio will
+	 * emulate open drain safely by driving low and switching to input for high.
+	 * 5 us is the driver's normal ~100 kHz setting.
+	 */
+	touch_i2c_gpio: i2c-gpio {
+		compatible = "i2c-gpio";
+		gpios = <&gpio8 0 0>, <&gpio7 7 0>;
+		i2c-gpio,delay-us = <5>;
+		i2c-gpio,timeout-ms = <100>;
 		pinctrl-names = "default";
-		pinctrl-0 = <&i2c2_pins>;
+		pinctrl-0 = <&i2c2_gpio_pins>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 		status = "okay";
@@ -96,7 +97,7 @@
 			reg = <0x70>;
 			interrupt-parent = <&gpio19>;
 			interrupts = <5 8>;
-			/* Match Huawei vendor RMI4's 100 ms wait before page select. */
+			/* Match Huawei vendor RMI4's 100 ms wait before first access. */
 			syna,startup-delay-ms = <100>;
 		};
 	};
@@ -170,14 +171,11 @@
 };
 
 &pmx0 {
-	/*
-	 * Important: on Hi3620 the mux encoding is function 0 for I2C2.
-	 * The in-tree hi3620-hi4511.dts uses 0 here; function 1 is GPIO/idle.
-	 */
-	i2c2_pins: i2c2-pins {
+	/* IOMG26/IOMG27 function 1 routes the former I2C2 pads to PL061 GPIO. */
+	i2c2_gpio_pins: i2c2-gpio-pins {
 		pinctrl-single,pins = <
-			0x068 0x0
-			0x06c 0x0
+			0x068 0x1
+			0x06c 0x1
 		>;
 	};
 };
