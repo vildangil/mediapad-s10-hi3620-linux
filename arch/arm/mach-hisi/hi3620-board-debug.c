@@ -24,10 +24,13 @@
 #define HI3620_GPIO21_PHYS             0xfc81b000
 #define HI3620_MAP_SIZE                0x1000
 
-/* Stock K3V2 iomux: GPIO63/64 use FUNC1 for I2C2 SCL/SDA. */
+/*
+ * Upstream hi3620-hi4511.dts documents the silicon mux encoding directly:
+ * function 0 is I2C2 SCL/SDA, while function 1 is the GPIO/idle state.
+ */
 #define IOMG26_I2C2_SCL                0x068
 #define IOMG27_I2C2_SDA                0x06c
-#define IOMG_I2C_FUNC                  0x1
+#define IOMG_I2C_FUNC                  0x0
 #define IOCG79_I2C2_SCL                0x918
 #define IOCG80_I2C2_SDA                0x91c
 #define IOCG_PULL_MASK                 0x3
@@ -97,7 +100,7 @@ static int __init hi3620_mediapad_i2c2_prepare(void)
                 return -ENOMEM;
         }
 
-        /* Match Huawei's NORMAL state: FUNC1 and no internal pulls. */
+        /* Match the upstream/vendor NORMAL state: function 0, no pulls. */
         writel(IOMG_I2C_FUNC, iomux + IOMG26_I2C2_SCL);
         writel(IOMG_I2C_FUNC, iomux + IOMG27_I2C2_SDA);
         pad = readl(iomux + IOCG79_I2C2_SCL);
