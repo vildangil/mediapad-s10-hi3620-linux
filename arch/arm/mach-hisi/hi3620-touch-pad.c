@@ -29,6 +29,8 @@
 
 #define IOCG_GPIO156                   0x00c
 #define IOCG_GPIO157                   0x010
+#define IOCG_I2C2_SCL                  0x118
+#define IOCG_I2C2_SDA                  0x11c
 #define IOCG_PULL_MASK                 0x3
 #define IOCG_NOPULL                    0x0
 #define IOCG_PULLUP                    0x1
@@ -60,31 +62,47 @@
 static void hi3620_mediapad_touch_bitbang_prepare(void)
 {
         void __iomem *iomux;
+        void __iomem *iocfg;
         void __iomem *gpio7;
         void __iomem *gpio8;
+        u32 scl_pad_old;
+        u32 sda_pad_old;
         u8 dir7;
         u8 dir8;
         u8 scl;
         u8 sda;
 
         iomux = ioremap(HI3620_IOMUX_PHYS, HI3620_MAP_SIZE);
+        iocfg = ioremap(HI3620_IOCFG_PHYS, HI3620_MAP_SIZE);
         gpio7 = ioremap(HI3620_GPIO7_PHYS, HI3620_MAP_SIZE);
         gpio8 = ioremap(HI3620_GPIO8_PHYS, HI3620_MAP_SIZE);
-        if (!iomux || !gpio7 || !gpio8) {
-                pr_err("HI3620-TOUCH-BITBANG: failed to map IOMUX/GPIO7/GPIO8\n");
+        if (!iomux || !iocfg || !gpio7 || !gpio8) {
+                pr_err("HI3620-TOUCH-BITBANG: failed to map IOMUX/IOCFG/GPIO7/GPIO8\n");
                 goto out;
         }
 
         /* Disconnect the DesignWare block and route both pads to PL061 GPIO. */
         writel(IOMG_GPIO_FUNC, iomux + IOMG26_I2C2_SCL);
         writel(IOMG_GPIO_FUNC, iomux + IOMG27_I2C2_SDA);
+
+        /*
+         * Huawei's generated CS low-power/GPIO state for gpio_063_cs and
+         * gpio_064_cs is FUNC1 + NOPULL + input.  Do not inherit the pin
+         * descriptors' reset-time PULLDOWN here: a pulldown would hold an
+         * open-drain I2C line low and make the bitbang test meaningless.
+         */
+        scl_pad_old = readl(iocfg + IOCG_I2C2_SCL);
+        sda_pad_old = readl(iocfg + IOCG_I2C2_SDA);
+        writel((scl_pad_old & ~IOCG_PULL_MASK) | IOCG_NOPULL,
+               iocfg + IOCG_I2C2_SCL);
+        writel((sda_pad_old & ~IOCG_PULL_MASK) | IOCG_NOPULL,
+               iocfg + IOCG_I2C2_SDA);
         mb();
 
         /*
          * Release both lines.  i2c-gpio emulates open-drain signaling by
-         * switching each PL061 pin between input (logic high via pull-up) and
-         * output-low.  Starting as input also lets us verify the physical bus
-         * idle level before the bitbang adapter probes.
+         * switching each PL061 pin between input (logic high via the board's
+         * external pull-up) and output-low.
          */
         dir7 = readb(gpio7 + PL061_GPIODIR) & ~BIT(I2C2_SCL_PIN);
         dir8 = readb(gpio8 + PL061_GPIODIR) & ~BIT(I2C2_SDA_PIN);
@@ -96,9 +114,11 @@ static void hi3620_mediapad_touch_bitbang_prepare(void)
         scl = !!(readb(gpio7 + PL061_DATA(I2C2_SCL_PIN)) & BIT(I2C2_SCL_PIN));
         sda = !!(readb(gpio8 + PL061_DATA(I2C2_SDA_PIN)) & BIT(I2C2_SDA_PIN));
 
-        pr_info("HI3620-TOUCH-BITBANG: mux=%08x/%08x dir=%02x/%02x released scl=%u sda=%u\n",
+        pr_info("HI3620-TOUCH-BITBANG: mux=%08x/%08x pad=%08x->%08x/%08x->%08x dir=%02x/%02x released scl=%u sda=%u\n",
                 readl(iomux + IOMG26_I2C2_SCL),
                 readl(iomux + IOMG27_I2C2_SDA),
+                scl_pad_old, readl(iocfg + IOCG_I2C2_SCL),
+                sda_pad_old, readl(iocfg + IOCG_I2C2_SDA),
                 readb(gpio7 + PL061_GPIODIR),
                 readb(gpio8 + PL061_GPIODIR), scl, sda);
 
@@ -107,6 +127,8 @@ out:
                 iounmap(gpio8);
         if (gpio7)
                 iounmap(gpio7);
+        if (iocfg)
+                iounmap(iocfg);
         if (iomux)
                 iounmap(iomux);
 }
