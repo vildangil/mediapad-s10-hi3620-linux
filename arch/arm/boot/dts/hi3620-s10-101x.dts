@@ -96,7 +96,8 @@
 			reg = <0x70>;
 			interrupt-parent = <&gpio19>;
 			interrupts = <5 8>;
-			syna,startup-delay-ms = <300>;
+			/* Match Huawei vendor RMI4's 100 ms wait before page select. */
+			syna,startup-delay-ms = <100>;
 		};
 	};
 
