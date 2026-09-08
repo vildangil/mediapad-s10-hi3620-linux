@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Huawei MediaPad 10 FHD touchscreen power/reset isolation.
+ * Huawei MediaPad 10 FHD touchscreen power/reset setup.
  *
- * The S10 schematic gives the touchscreen a dedicated VDD_TP_3V3 rail and
- * a VOUT5_1V8_LS I/O rail switched by GPIO61_TP1V8_EN.  Keep the 3.3 V rail
- * untouched and perform a deterministic cycle only on the documented 1.8 V
- * source/load-switch while RESET is asserted.  In particular, do not toggle
- * the generic K3V2 LDO13 rail used by other Huawei boards.
+ * Huawei's K3V2 Synaptics driver uses two HI6421 supplies for the RMI4
+ * controller: LDO13 (ts-vdd) and LDO5 (ts-vbus), then enables GPIO61 and
+ * performs a 20 ms active-low hardware reset before reading the PDT.
+ *
+ * Keep the bootloader-selected LDO13 voltage intact: only set its enable bit.
+ * LDO5 is the documented 1.8 V source behind GPIO61_TP1V8_EN, so force its
+ * VSEL to 1.8 V and enable it.  Do not power-cycle either PMIC rail here.
  */
 
 #include <linux/bitops.h>
@@ -36,7 +38,6 @@
 #define IOCG_NOPULL                    0x0
 #define IOCG_PULLUP                    0x1
 
-/* VOUT5_1V8 source.  LDO13 is read for diagnostics only and never modified. */
 #define PMU_LDO5_CTRL                  (0x25 << 2)
 #define PMU_LDO13_CTRL                 (0x2d << 2)
 #define PMU_LDO_ENABLE                 0x10
@@ -86,15 +87,15 @@ static void hi3620_touch_1v8_set(void __iomem *iomux,
         mb();
 }
 
-static void hi3620_touch_s10_log(const char *phase,
-                                 void __iomem *iomux,
-                                 void __iomem *iocfg,
-                                 void __iomem *gpio7,
-                                 void __iomem *gpio8,
-                                 void __iomem *gpio19,
-                                 void __iomem *pmu)
+static void hi3620_touch_power_log(const char *phase,
+                                   void __iomem *iomux,
+                                   void __iomem *iocfg,
+                                   void __iomem *gpio7,
+                                   void __iomem *gpio8,
+                                   void __iomem *gpio19,
+                                   void __iomem *pmu)
 {
-        pr_info("HI3620-TOUCH-S10-PWR[%s]: tp1v8=%u rst=%u attn=%u ldo5=%02x ldo13_untouched=%02x scl=%u sda=%u mux=%08x/%08x pad=%08x/%08x\n",
+        pr_info("HI3620-TOUCH-VENDOR-PWR[%s]: tp1v8=%u rst=%u attn=%u ldo5=%02x ldo13=%02x scl=%u sda=%u mux=%08x/%08x pad=%08x/%08x\n",
                 phase,
                 hi3620_line(gpio7, TP1V8_EN_PIN),
                 hi3620_line(gpio19, TOUCH_RESET_PIN),
@@ -109,7 +110,7 @@ static void hi3620_touch_s10_log(const char *phase,
                 readl(iocfg + IOCG_I2C2_SDA));
 }
 
-static int __init hi3620_mediapad_touch_bus_isolation(void)
+static int __init hi3620_mediapad_touch_vendor_power(void)
 {
         void __iomem *iomux = NULL;
         void __iomem *iocfg = NULL;
@@ -118,8 +119,8 @@ static int __init hi3620_mediapad_touch_bus_isolation(void)
         void __iomem *gpio19 = NULL;
         void __iomem *pmu = NULL;
         u8 dir19;
-        u8 ldo5_old;
-        u8 ldo5_on;
+        u8 ldo5_old, ldo5_on;
+        u8 ldo13_old, ldo13_on;
 
         if (!of_machine_is_compatible("huawei,s10-101x"))
                 return 0;
@@ -131,12 +132,11 @@ static int __init hi3620_mediapad_touch_bus_isolation(void)
         gpio19 = ioremap(HI3620_GPIO19_PHYS, HI3620_MAP_SIZE);
         pmu = ioremap(HI3620_PMUSPI_PHYS, HI3620_MAP_SIZE);
         if (!iomux || !iocfg || !gpio7 || !gpio8 || !gpio19 || !pmu) {
-                pr_err("HI3620-TOUCH-S10-PWR: failed to map controls\n");
+                pr_err("HI3620-TOUCH-VENDOR-PWR: failed to map controls\n");
                 goto out;
         }
 
-        /* Keep the physical TP bus on the I2C2 pads but in GPIO mode for the
-         * current i2c-gpio transport. */
+        /* Keep the fitted I2C2 pads in GPIO/open-drain mode for i2c-gpio. */
         writel(IOMG_GPIO_FUNC, iomux + IOMG26_I2C2_SCL);
         writel(IOMG_GPIO_FUNC, iomux + IOMG27_I2C2_SDA);
         writel((readl(iocfg + IOCG_I2C2_SCL) & ~IOCG_PULL_MASK) |
@@ -150,45 +150,48 @@ static int __init hi3620_mediapad_touch_bus_isolation(void)
         dir19 &= ~BIT(TOUCH_ATTN_PIN);
         writeb(dir19, gpio19 + PL061_GPIODIR);
 
-        /* Ensure the documented VOUT5 source is 1.8 V and enabled.  Keep the
-         * dedicated 3.3 V rail and LDO13 entirely untouched. */
+        ldo13_old = readb(pmu + PMU_LDO13_CTRL);
         ldo5_old = readb(pmu + PMU_LDO5_CTRL);
+
+        /* Huawei K3V2: ts-vdd (LDO13) first.  Preserve VSEL and all unrelated
+         * bits, setting only LDO_ENA (0x10).  On this tablet the bootloader
+         * leaves VSEL=6, i.e. 2.85 V. */
+        ldo13_on = ldo13_old | PMU_LDO_ENABLE;
+        writeb(ldo13_on, pmu + PMU_LDO13_CTRL);
+        mb();
+        udelay(250);
+
+        /* Then ts-vbus (LDO5) at 1.8 V. */
         ldo5_on = (ldo5_old & ~PMU_LDO_CTRL_MASK) |
                   PMU_LDO_ENABLE | PMU_LDO5_1V8;
         writeb(ldo5_on, pmu + PMU_LDO5_CTRL);
         mb();
+        udelay(250);
+
+        /* MediaPad-specific load switch on the 1.8 V I/O rail. */
+        hi3620_touch_1v8_set(iomux, iocfg, gpio7, true);
+        hi3620_touch_bus_release(gpio7, gpio8);
         msleep(5);
+        hi3620_touch_power_log("rails-on", iomux, iocfg,
+                               gpio7, gpio8, gpio19, pmu);
 
-        hi3620_touch_s10_log("initial", iomux, iocfg,
-                             gpio7, gpio8, gpio19, pmu);
-
-        /* RESET low before removing the switched 1.8 V I/O rail. */
+        /* Huawei vendor driver: RESET low for 20 ms, then high. */
         writeb(0, gpio19 + PL061_DATA(TOUCH_RESET_PIN));
         mb();
-        msleep(10);
-        hi3620_touch_1v8_set(iomux, iocfg, gpio7, false);
-        hi3620_touch_bus_release(gpio7, gpio8);
-        msleep(100);
-        hi3620_touch_s10_log("reset-low-1v8-off", iomux, iocfg,
-                             gpio7, gpio8, gpio19, pmu);
-
-        /* Restore the switched 1.8 V rail, allow it to settle, then release
-         * RESET exactly once.  The always-on TP 3.3 V rail is never disturbed. */
-        hi3620_touch_1v8_set(iomux, iocfg, gpio7, true);
-        msleep(10);
-        hi3620_touch_bus_release(gpio7, gpio8);
-        hi3620_touch_s10_log("reset-low-1v8-on", iomux, iocfg,
-                             gpio7, gpio8, gpio19, pmu);
+        msleep(20);
+        hi3620_touch_power_log("reset-low", iomux, iocfg,
+                               gpio7, gpio8, gpio19, pmu);
 
         writeb(BIT(TOUCH_RESET_PIN),
                gpio19 + PL061_DATA(TOUCH_RESET_PIN));
         mb();
-        msleep(200);
+        msleep(2);
         hi3620_touch_bus_release(gpio7, gpio8);
-        hi3620_touch_s10_log("ready", iomux, iocfg,
-                             gpio7, gpio8, gpio19, pmu);
+        hi3620_touch_power_log("ready", iomux, iocfg,
+                               gpio7, gpio8, gpio19, pmu);
 
-        pr_info("HI3620-TOUCH-S10-PWR: ldo5 %02x->%02x; LDO13 never written\n",
+        pr_info("HI3620-TOUCH-VENDOR-PWR: LDO13 %02x->%02x, LDO5 %02x->%02x, reset 20ms\n",
+                ldo13_old, readb(pmu + PMU_LDO13_CTRL),
                 ldo5_old, readb(pmu + PMU_LDO5_CTRL));
 
 out:
@@ -207,5 +210,5 @@ out:
         return 0;
 }
 
-/* Runs after pad setup and before the i2c-gpio adapter probes the sensor. */
-arch_initcall(hi3620_mediapad_touch_bus_isolation);
+/* After pad preparation and before the i2c-gpio transport probes RMI4. */
+arch_initcall(hi3620_mediapad_touch_vendor_power);
