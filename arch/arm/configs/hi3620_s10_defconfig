@@ -58,8 +58,11 @@ CONFIG_RMI4_F12=y
 
 # udev/OpenRC need netlink/AF_UNIX. USB networking needs IPv4 for
 # 172.16.42.1/172.16.42.2. unudhcpd uses an AF_PACKET socket to bind directly
-# to usb0, so CONFIG_PACKET is required.
+# to usb0, so CONFIG_PACKET is required. NETDEVICES is also the parent Kconfig
+# menu for the on-board WLAN driver; without it CONFIG_WLAN/BRCMFMAC is silently
+# discarded by olddefconfig.
 CONFIG_NET=y
+CONFIG_NETDEVICES=y
 CONFIG_UNIX=y
 CONFIG_INET=y
 CONFIG_PACKET=y
