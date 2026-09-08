@@ -2,11 +2,10 @@
 /*
  * MediaPad 10 FHD USB session-valid workaround.
  *
- * Keep the one operation that made the host notice the gadget: if DWC2 still
- * sees B-session invalid after userspace binds configfs, force Hi3620's
- * external VBUS-valid controls and generate one reconnect edge.  The repeated
- * EP0/register dumps are intentionally gone; USB protocol debugging can be
- * re-enabled later without filling the console after login.
+ * Hi3620's DWC2 core may come up with B-session invalid even though the
+ * postmarketOS configfs gadget is ready.  Force the external VBUS-valid path
+ * and generate a reconnect edge early enough for the host to enumerate it.
+ * Retry a few times only while B-session is still invalid.
  */
 
 #include <linux/bitops.h>
@@ -15,6 +14,7 @@
 #include <linux/io.h>
 #include <linux/jiffies.h>
 #include <linux/of.h>
+#include <linux/printk.h>
 #include <linux/workqueue.h>
 
 #define HI3620_PCTRL_PHYS              0xfca09000
@@ -29,6 +29,11 @@
 #define DCTL_SFTDISCON                 BIT(1)
 #define PCTRL16_VBUSVLDEXT_MASK        (0x3 << 10)
 
+#define HI3620_USB_FIRST_DELAY         (5 * HZ)
+#define HI3620_USB_RETRY_DELAY         (3 * HZ)
+#define HI3620_USB_MAX_ATTEMPTS        3
+
+static unsigned int hi3620_usb_session_attempts;
 static void hi3620_usb_session_once(struct work_struct *work);
 static DECLARE_DELAYED_WORK(hi3620_usb_session_work,
                             hi3620_usb_session_once);
@@ -54,18 +59,34 @@ static void hi3620_usb_session_once(struct work_struct *work)
                 return;
         }
 
+        hi3620_usb_session_attempts++;
         gotgctl = readl(usb + USB_GOTGCTL);
+
         if (!(gotgctl & GOTGCTL_BSESVLD)) {
                 p16 = readl(pctrl + PCTRL_PERI_CTRL16);
                 p16 |= PCTRL16_VBUSVLDEXT_MASK;
                 writel(p16, pctrl + PCTRL_PERI_CTRL16);
+                mb();
                 msleep(5);
 
                 dctl = readl(usb + USB_DCTL);
                 writel(dctl | DCTL_SFTDISCON, usb + USB_DCTL);
+                mb();
                 msleep(20);
-                writel((dctl | DCTL_SFTDISCON) & ~DCTL_SFTDISCON,
-                       usb + USB_DCTL);
+                writel(dctl & ~DCTL_SFTDISCON, usb + USB_DCTL);
+                mb();
+                msleep(250);
+
+                gotgctl = readl(usb + USB_GOTGCTL);
+                pr_info("HI3620-USB-SESSION: attempt=%u gotgctl=%08x dctl=%08x pctrl16=%08x\n",
+                        hi3620_usb_session_attempts, gotgctl,
+                        readl(usb + USB_DCTL),
+                        readl(pctrl + PCTRL_PERI_CTRL16));
+
+                if (!(gotgctl & GOTGCTL_BSESVLD) &&
+                    hi3620_usb_session_attempts < HI3620_USB_MAX_ATTEMPTS)
+                        schedule_delayed_work(&hi3620_usb_session_work,
+                                              HI3620_USB_RETRY_DELAY);
         }
 
         iounmap(usb);
@@ -75,7 +96,8 @@ static void hi3620_usb_session_once(struct work_struct *work)
 static int __init hi3620_usb_session_start(void)
 {
         if (of_machine_is_compatible("huawei,s10-101x"))
-                schedule_delayed_work(&hi3620_usb_session_work, 20 * HZ);
+                schedule_delayed_work(&hi3620_usb_session_work,
+                                      HI3620_USB_FIRST_DELAY);
         return 0;
 }
 late_initcall(hi3620_usb_session_start);
