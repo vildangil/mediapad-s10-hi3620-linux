@@ -2,12 +2,11 @@
 /*
  * Huawei MediaPad 10 FHD touchscreen pad/reset setup.
  *
- * The S10 schematic routes TP_SCL/TP_SDA to I2C2 and gives the panel a
- * dedicated 3.3 V rail plus a switched 1.8 V I/O rail controlled by GPIO61.
- * Do not reuse the generic K3V2/P6 LDO13 recipe here: on S10 that regulator
- * is not the documented TP 3.3 V supply.  Rail cycling is handled later by
- * the S10-specific isolation helper; this file only prepares pads/reset and
- * the GPIO-backed I2C transport.
+ * The S10 routes TP_SCL/TP_SDA to I2C2, GPIO61 gates the touchscreen 1.8 V
+ * I/O rail, and Huawei's K3V2 Synaptics stack names HI6421 LDO13/LDO5 as
+ * ts-vdd/ts-vbus.  Rail enable and the vendor-style reset sequence are handled
+ * later by hi3620-touch-busdiag.c; this file only prepares pads/reset and the
+ * GPIO-backed I2C transport.
  */
 
 #include <linux/bitops.h>
@@ -37,7 +36,7 @@
 #define IOMG27_I2C2_SDA                0x06c
 #define IOMG_GPIO_FUNC                 0x1
 
-/* Read-only diagnostics: these are deliberately not modified here. */
+/* Read-only diagnostics at this stage; power helper modifies them later. */
 #define PMU_LDO5_CTRL                  (0x25 << 2)
 #define PMU_LDO13_CTRL                 (0x2d << 2)
 
@@ -127,7 +126,7 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
         if (!of_machine_is_compatible("huawei,s10-101x"))
                 return 0;
 
-        pr_info("HI3620-TOUCH: S10 pad/reset setup (dedicated 3V3 + GPIO61 1V8 topology)\n");
+        pr_info("HI3620-TOUCH: S10 pad/reset setup (HI6421 rails + GPIO61 1V8 switch)\n");
 
         iocfg = ioremap(HI3620_IOCFG_PHYS, HI3620_MAP_SIZE);
         gpio = ioremap(HI3620_GPIO19_PHYS, HI3620_MAP_SIZE);
@@ -137,9 +136,7 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
                 goto out;
         }
 
-        /* S10 TP power is not LDO13.  Record the legacy PMIC values so the
-         * ramoops proves that this path no longer modifies them. */
-        pr_info("HI3620-TOUCH-S10-PWR: pad stage leaves PMIC untouched ldo5=%02x ldo13=%02x\n",
+        pr_info("HI3620-TOUCH-PWR-PRE: ldo5=%02x ldo13=%02x\n",
                 readb(pmu + PMU_LDO5_CTRL), readb(pmu + PMU_LDO13_CTRL));
 
         cfg156 = readl(iocfg + IOCG_GPIO156);
@@ -154,8 +151,7 @@ static int __init hi3620_mediapad_touch_pad_prepare(void)
         dir &= ~BIT(TOUCH_ATTN_PIN);
         writeb(dir, gpio + PL061_GPIODIR);
 
-        /* Keep reset high here; the S10 power helper performs the one
-         * deterministic reset/power-switch cycle later in init. */
+        /* Power helper performs the deterministic vendor-style reset later. */
         writeb(BIT(TOUCH_RESET_PIN), gpio + PL061_DATA(TOUCH_RESET_PIN));
         mb();
         attn = readb(gpio + PL061_DATA(TOUCH_ATTN_PIN));
