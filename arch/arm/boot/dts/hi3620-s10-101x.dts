@@ -7,6 +7,7 @@
 /dts-v1/;
 
 #include "hi3620.dtsi"
+#include <dt-bindings/gpio/gpio.h>
 
 / {
 	model = "Huawei MediaPad 10 FHD S10-101x";
@@ -41,6 +42,17 @@
 		status = "okay";
 	};
 
+	/*
+	 * BCM4330 WL_REG_ON is GPIO2. mmc-pwrseq-simple asserts it low while
+	 * powering the SDIO host, then releases it high and gives the chip the
+	 * same 200 ms settling time used by Huawei's vendor driver.
+	 */
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		reset-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+		post-power-on-delay-ms = <200>;
+	};
+
 	/* Alternate touchscreen controller/bus variant is not used on this tablet. */
 	i2c1: i2c@fcb09000 {
 		compatible = "snps,designware-i2c";
@@ -56,8 +68,8 @@
 
 	/*
 	 * Physical I2C2 DesignWare at 0xfcb0c000 is deliberately disabled for
-	 * this diagnostic boot.  It accepts the Synaptics page-select bytes into
-	 * TX FIFO but never starts the transfer.  The i2c-gpio adapter below uses
+	 * this diagnostic boot. It accepts the Synaptics page-select bytes into
+	 * TX FIFO but never starts the transfer. The i2c-gpio adapter below uses
 	 * the exact same physical wires through GPIO63/GPIO64 instead.
 	 */
 	i2c2: i2c@fcb0c000 {
@@ -77,7 +89,7 @@
 	 *   SDA = GPIO64 = GPIO8_0
 	 *   SCL = GPIO63 = GPIO7_7
 	 *
-	 * Do not mark either GPIO as hardware-open-drain.  Linux i2c-gpio will
+	 * Do not mark either GPIO as hardware-open-drain. Linux i2c-gpio will
 	 * emulate open drain safely by driving low and switching to input for high.
 	 * 5 us is the driver's normal ~100 kHz setting.
 	 */
@@ -168,6 +180,34 @@
 		cap-mmc-highspeed;
 		status = "okay";
 	};
+
+	/*
+	 * Hi3620 MMC3 is SDIO1 on the S10 board. Huawei's schematics map
+	 * SDIO1_CLK/CMD/DATA0..3 to GPIO100..105 and connect this bus directly
+	 * to the BCM4330 Wi-Fi chip.
+	 */
+	wifi_sdio: mmc@fcd06000 {
+		compatible = "hisilicon,hi4511-dw-mshc";
+		reg = <0xfcd06000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 19 4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		clocks = <&mmc_clock HI3620_MMC_CIUCLK3>,
+			 <&clock HI3620_DDRC_PER_CLK>;
+		clock-names = "ciu", "biu";
+		num-slots = <1>;
+		fifo-depth = <0x100>;
+		bus-width = <4>;
+		max-frequency = <50000000>;
+		non-removable;
+		cap-sdio-irq;
+		keep-power-in-suspend;
+		mmc-pwrseq = <&wifi_pwrseq>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sdio1_pins>;
+		status = "okay";
+	};
 };
 
 &pmx0 {
@@ -176,6 +216,14 @@
 		pinctrl-single,pins = <
 			0x068 0x1
 			0x06c 0x1
+		>;
+	};
+
+	/* Vendor NORMAL mode for GPIO100..105 / SDIO1 is function 0. */
+	sdio1_pins: sdio1-pins {
+		pinctrl-single,pins = <
+			0x0cc 0x0
+			0x0d0 0x0
 		>;
 	};
 };
