@@ -11,6 +11,7 @@ on:
   push:
     branches:
       - mediapad-s10-hi3620
+      - pmos-fixall-20260908
     paths:
       - 'arch/arm/**'
       - 'drivers/**'
@@ -101,8 +102,7 @@ jobs:
           make O=out hi3620_s10_defconfig
           make O=out olddefconfig
 
-          # Sanity checks: this build must stay on the Hi3620-only path and
-          # keep the compatibility/debug options needed for first boot.
+          # Sanity checks: keep SMP and all interfaces needed by the test boot.
           grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
           grep -q '^CONFIG_ARCH_HISI=y$' out/.config
           grep -q '^CONFIG_ARCH_HI3xxx=y$' out/.config
@@ -115,8 +115,12 @@ jobs:
           grep -q '^CONFIG_SERIAL_AMBA_PL011=y$' out/.config
           grep -q '^CONFIG_SERIAL_AMBA_PL011_CONSOLE=y$' out/.config
           grep -q '^CONFIG_DEBUG_HI3620_UART=y$' out/.config
+          grep -q '^CONFIG_CFG80211=y$' out/.config
+          grep -q '^CONFIG_BRCMFMAC=y$' out/.config
+          grep -q '^CONFIG_BRCMFMAC_SDIO=y$' out/.config
+          grep -q '^CONFIG_PWRSEQ_SIMPLE=y$' out/.config
 
-          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART)=' out/.config
+          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE)=' out/.config
 
       - name: Build zImage and MediaPad DTB
         run: |
