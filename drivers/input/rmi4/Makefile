@@ -1,5 +1,8 @@
 obj-$(CONFIG_RMI4_CORE) += rmi_core.o
-rmi_core-y := rmi_bus.o rmi_driver.o rmi_f01.o rmi_mediapad_rawdiag.o
+# Keep the normal RMI4 path for production boots.  The MediaPad raw F54
+# diagnostic helper continuously reconfigured/calibrated the sensor and was
+# useful for bring-up, but it interferes with normal F11 touch reporting.
+rmi_core-y := rmi_bus.o rmi_driver.o rmi_f01.o
 
 rmi_core-$(CONFIG_RMI4_2D_SENSOR) += rmi_2d_sensor.o
 
