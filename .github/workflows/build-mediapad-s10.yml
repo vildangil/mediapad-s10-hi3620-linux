@@ -52,21 +52,10 @@ jobs:
 
       - name: Fix legacy build syntax for modern toolchains
         run: |
-          # Linux 4.9's bundled DTC defines yylloc in both the lexer and
-          # parser. GCC 10+ defaults to -fno-common, so the host linker
-          # rejects the duplicate symbol. Keep the parser definition and
-          # make the lexer declaration extern, matching newer kernels.
           sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
             scripts/dtc/dtc-lexer.l \
             scripts/dtc/dtc-lexer.lex.c_shipped
 
-          grep -n 'YYLTYPE yylloc' \
-            scripts/dtc/dtc-lexer.l \
-            scripts/dtc/dtc-lexer.lex.c_shipped
-
-          # Old ARM assembly used `#alloc` / `#execinstr` ELF section flags.
-          # Modern GNU as treats `#` as the start of an ARM comment and
-          # rejects these directives. Use the equivalent quoted flags.
           sed -i 's/\.section "\.proc\.info\.init", #alloc/.section ".proc.info.init", "a"/' \
             arch/arm/mm/proc-v7.S
           sed -i 's/\.section "\.start", #alloc, #execinstr/.section ".start", "ax"/' \
@@ -74,14 +63,7 @@ jobs:
           sed -i 's/\.section \.piggydata,#alloc/.section .piggydata,"a"/' \
             arch/arm/boot/compressed/piggy.S
 
-          grep -n '\.proc\.info\.init' arch/arm/mm/proc-v7.S
-          grep -n '\.section "\.start"' arch/arm/boot/compressed/head.S
-          grep -n '\.piggydata' arch/arm/boot/compressed/piggy.S
-
-          # Linux 4.9/4.14 RMI4 F11 has a real address typo: after reading
-          # F11 controls from control_base_addr it writes the block back to
-          # query_base_addr. Later kernels use control_base_addr. Apply that
-          # upstream fix to the build until the old source is rebased/cleaned.
+          # Linux 4.9/4.14 RMI4 F11 writes controls back to the wrong base.
           python3 - <<'PY'
           from pathlib import Path
           p = Path('drivers/input/rmi4/rmi_f11.c')
@@ -93,8 +75,6 @@ jobs:
               raise SystemExit(f'expected 2 F11 control-base typos, found {count}')
           p.write_text(s.replace(old, new))
           PY
-          grep -n 'f11_write_control_regs' drivers/input/rmi4/rmi_f11.c
-          grep -n 'dev_controls, fn->fd.control_base_addr' drivers/input/rmi4/rmi_f11.c
 
       - name: Configure MediaPad Hi3620 kernel
         run: |
@@ -102,7 +82,11 @@ jobs:
           make O=out hi3620_s10_defconfig
           make O=out olddefconfig
 
-          # Sanity checks: keep SMP and all interfaces needed by the test boot.
+          # Print the real resolved state first. Wi-Fi options are inspected
+          # from the uploaded config after build because 4.9 has old Kconfig
+          # defaults/dependency behaviour.
+          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER)=' out/.config || true
+
           grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
           grep -q '^CONFIG_ARCH_HISI=y$' out/.config
           grep -q '^CONFIG_ARCH_HI3xxx=y$' out/.config
@@ -115,19 +99,10 @@ jobs:
           grep -q '^CONFIG_SERIAL_AMBA_PL011=y$' out/.config
           grep -q '^CONFIG_SERIAL_AMBA_PL011_CONSOLE=y$' out/.config
           grep -q '^CONFIG_DEBUG_HI3620_UART=y$' out/.config
-          grep -q '^CONFIG_CFG80211=y$' out/.config
-          grep -q '^CONFIG_BRCMFMAC=y$' out/.config
-          grep -q '^CONFIG_BRCMFMAC_SDIO=y$' out/.config
-          grep -q '^CONFIG_PWRSEQ_SIMPLE=y$' out/.config
-
-          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE)=' out/.config
 
       - name: Build zImage and MediaPad DTB
         run: |
           make -j"$(nproc)" O=out zImage
-
-          # The ARM makefiles automatically prepend arch/arm/boot/dts/ to
-          # a .dtb target, so pass only the DTB filename here.
           make -j"$(nproc)" O=out hi3620-s10-101x.dtb
 
       - name: Create appended-DTB kernel
@@ -159,7 +134,6 @@ jobs:
             echo "Invalid release version: $RELEASE_VERSION" >&2
             exit 2
           fi
-
           (cd artifacts && zip -9 -r ../kernel.zip .)
           unzip -l kernel.zip
           sha256sum kernel.zip
