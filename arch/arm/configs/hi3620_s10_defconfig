@@ -1,8 +1,8 @@
 # Huawei MediaPad 10 FHD S10-101x / HiSilicon Hi3620 bring-up
 #
 # Keep this intentionally small. The current milestone is CPU/GIC/timers/UART
-# plus eMMC, simplefb console, USB gadget networking, touchscreen and BCM4330
-# SDIO Wi-Fi.
+# plus eMMC, simplefb console, USB gadget networking, touchscreen, BCM4330
+# SDIO Wi-Fi, Vivante GC4000 render acceleration and battery fuel gauge.
 
 CONFIG_SYSVIPC=y
 CONFIG_NO_HZ=y
@@ -43,7 +43,8 @@ CONFIG_INPUT_UINPUT=y
 # Synaptics panel controller used by the stock MediaPad firmware. The panel's
 # attention/reset signals are on the Hi3620 PL061 GPIO19 block, so GPIOLIB is
 # not optional. The physical I2C2 pads are routed through GPIO63/GPIO64 and
-# bitbanged with i2c-gpio because the native DesignWare I2C2 master stalls.
+# bitbanged with i2c-gpio because the native DesignWare I2C2 master stalled
+# before its missing K3V2 reset sequencing was identified.
 CONFIG_GPIOLIB=y
 CONFIG_GPIO_SYSFS=y
 CONFIG_GPIO_PL061=y
@@ -69,8 +70,8 @@ CONFIG_PACKET=y
 # CONFIG_IPV6 is not set
 
 # On-board Broadcom BCM4330. The tablet routes it through Hi3620 SDIO1
-# (MMC3 at 0xfcd06000) and WL_REG_ON is GPIO2. brcmfmac needs cfg80211 and a
-# firmware loader; PWRSEQ_SIMPLE toggles WL_REG_ON before SDIO enumeration.
+# (MMC3 at 0xfcd06000) and WL_REG_ON is GPIO2. The board helper supplies the
+# missing HI6421 rails, 32 kHz sleep clock and MMC3 reset release before probe.
 CONFIG_WIRELESS=y
 CONFIG_CFG80211=y
 CONFIG_WLAN=y
@@ -95,12 +96,24 @@ CONFIG_FONTS=y
 CONFIG_FONT_8x16=y
 CONFIG_FONT_SUN12x22=y
 
+# Hi3620 integrates a Vivante GC4000.  Etnaviv is render-only here; display
+# remains simplefb for this test image so GPU bring-up cannot disturb scanout.
+CONFIG_DRM=y
+CONFIG_DRM_ETNAVIV=y
+# CONFIG_DRM_ETNAVIV_REGISTER_LOGGING is not set
+
 CONFIG_MMC=y
 CONFIG_MMC_BLOCK=y
 CONFIG_MMC_DW=y
 CONFIG_MMC_DW_PLTFM=y
 CONFIG_MMC_DW_K3=y
 CONFIG_PWRSEQ_SIMPLE=y
+
+# BQ27510 fuel gauge on native K3V2 I2C0.  This is read-only monitoring and
+# provides capacity/voltage/current through /sys/class/power_supply.
+CONFIG_POWER_SUPPLY=y
+CONFIG_BATTERY_BQ27XXX=y
+CONFIG_BATTERY_BQ27XXX_I2C=y
 
 # Hi3620 USB2DVC is a Synopsys DWC2 OTG core. The MediaPad-specific arch
 # helper reproduces Huawei's PicoPHY reset/clock programming before the
