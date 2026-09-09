@@ -20,8 +20,6 @@ CONFIG_ARCH_HI3xxx=y
 CONFIG_SMP=y
 CONFIG_NR_CPUS=4
 
-# postmarketOS armv7 userspace is ARM EABI5 hard-float and uses VFPv3-D16.
-# Without these, PID 1 reaches exec but dies immediately with SIGILL.
 CONFIG_AEABI=y
 CONFIG_VFP=y
 
@@ -33,18 +31,13 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_BLK_DEV_RAM=y
 CONFIG_BLK_DEV_RAM_SIZE=65536
 
-# fbkeyboard needs /dev/uinput to inject key events and an EV_ABS touchscreen
-# to select as its input source. UINPUT lives below INPUT_MISC in this tree.
 CONFIG_INPUT=y
 CONFIG_INPUT_EVDEV=y
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_KEYBOARD_GPIO=y
 CONFIG_INPUT_MISC=y
 CONFIG_INPUT_UINPUT=y
 
-# Synaptics panel controller used by the stock MediaPad firmware. The panel's
-# attention/reset signals are on the Hi3620 PL061 GPIO19 block, so GPIOLIB is
-# not optional. The physical I2C2 pads are routed through GPIO63/GPIO64 and
-# bitbanged with i2c-gpio because the native DesignWare I2C2 master stalled
-# before its missing K3V2 reset sequencing was identified.
 CONFIG_GPIOLIB=y
 CONFIG_GPIO_SYSFS=y
 CONFIG_GPIO_PL061=y
@@ -57,11 +50,6 @@ CONFIG_RMI4_I2C=y
 CONFIG_RMI4_F11=y
 CONFIG_RMI4_F12=y
 
-# udev/OpenRC need netlink/AF_UNIX. USB networking needs IPv4 for
-# 172.16.42.1/172.16.42.2. unudhcpd uses an AF_PACKET socket to bind directly
-# to usb0, so CONFIG_PACKET is required. NETDEVICES is also the parent Kconfig
-# menu for the on-board WLAN driver; without it CONFIG_WLAN/BRCMFMAC is silently
-# discarded by olddefconfig.
 CONFIG_NET=y
 CONFIG_NETDEVICES=y
 CONFIG_UNIX=y
@@ -69,9 +57,6 @@ CONFIG_INET=y
 CONFIG_PACKET=y
 # CONFIG_IPV6 is not set
 
-# On-board Broadcom BCM4330. The tablet routes it through Hi3620 SDIO1
-# (MMC3 at 0xfcd06000) and WL_REG_ON is GPIO2. The board helper supplies the
-# missing HI6421 rails, 32 kHz sleep clock and MMC3 reset release before probe.
 CONFIG_WIRELESS=y
 CONFIG_CFG80211=y
 CONFIG_WLAN=y
@@ -83,9 +68,6 @@ CONFIG_SERIAL_AMBA_PL011=y
 CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
 CONFIG_SERIAL_OF_PLATFORM=y
 
-# The bootloader leaves a working 1920x1200 ARGB8888 scanout on EDC0 CH2.
-# Register that existing surface as /dev/fb0 without touching display timing
-# registers, and use fbcon so kernel/userspace console output can be seen.
 CONFIG_VT=y
 CONFIG_VT_CONSOLE=y
 CONFIG_FB=y
@@ -96,8 +78,8 @@ CONFIG_FONTS=y
 CONFIG_FONT_8x16=y
 CONFIG_FONT_SUN12x22=y
 
-# Hi3620 integrates a Vivante GC4000.  Etnaviv is render-only here; display
-# remains simplefb for this test image so GPU bring-up cannot disturb scanout.
+# Hi3620 integrates a Vivante GC4000. Etnaviv remains diagnostic/render-only
+# until the chip identifies correctly; Xorg is forced to fbdev in userspace.
 CONFIG_DRM=y
 CONFIG_DRM_ETNAVIV=y
 # CONFIG_DRM_ETNAVIV_REGISTER_LOGGING is not set
@@ -109,18 +91,10 @@ CONFIG_MMC_DW_PLTFM=y
 CONFIG_MMC_DW_K3=y
 CONFIG_PWRSEQ_SIMPLE=y
 
-# BQ27510 fuel gauge on native K3V2 I2C0.  This is read-only monitoring and
-# provides capacity/voltage/current through /sys/class/power_supply.
 CONFIG_POWER_SUPPLY=y
 CONFIG_BATTERY_BQ27XXX=y
 CONFIG_BATTERY_BQ27XXX_I2C=y
 
-# Hi3620 USB2DVC is a Synopsys DWC2 OTG core. The MediaPad-specific arch
-# helper reproduces Huawei's PicoPHY reset/clock programming before the
-# generic DWC2 driver probes the core.
-#
-# postmarketOS initramfs creates a configfs RNDIS gadget, assigns
-# 172.16.42.1 to usb0 and starts unudhcpd.
 CONFIG_USB_GADGET=y
 CONFIG_USB_DWC2=y
 CONFIG_USB_DWC2_PERIPHERAL=y
@@ -131,8 +105,6 @@ CONFIG_EXT4_FS=y
 CONFIG_TMPFS=y
 CONFIG_TMPFS_POSIX_ACL=y
 
-# Persistent early-boot logging. The board DTS reserves the final 1 MiB of
-# known-good System RAM for ramoops so a failed boot can be inspected later.
 CONFIG_PSTORE=y
 CONFIG_PSTORE_CONSOLE=y
 CONFIG_PSTORE_RAM=y
