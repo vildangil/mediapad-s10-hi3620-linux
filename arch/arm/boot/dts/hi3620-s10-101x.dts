@@ -228,6 +228,21 @@
 	};
 };
 
+/*
+ * S10 schematic: GPIO6 drives the TPS61086 5 V boost enable. VREG_5V then
+ * feeds the dedicated 3.3 V converter for VDD_TP_3V3. Keep the boost enabled
+ * during bring-up so the Synaptics controller has both its 1.8 V I/O rail and
+ * the 3.3 V sensor/analog rail. The same boost also supplies USB/SPK on stock.
+ */
+&gpio0 {
+	tp_5v_enable_hog: tp-5v-enable-hog {
+		gpio-hog;
+		gpios = <6 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "tp-5v-enable";
+	};
+};
+
 &gpio19 {
 	/delete-property/ gpio-ranges;
 
