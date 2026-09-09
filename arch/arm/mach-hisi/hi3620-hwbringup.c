@@ -16,6 +16,7 @@
 
 #define HI3620_SCTRL_PHYS              0xfc802000
 #define HI3620_PMCTRL_PHYS             0xfca08000
+#define HI3620_PCTRL_PHYS              0xfca09000
 #define HI3620_PMUSPI_PHYS             0xfcc00000
 #define HI3620_MAP_SIZE                0x1000
 
@@ -27,8 +28,10 @@
 #define SCTRL_RST_EN1                  0x08c
 #define SCTRL_RST_DIS1                 0x090
 #define SCTRL_RST_STATUS1              0x094
+#define SCTRL_RST_EN2                  0x098
 #define SCTRL_RST_DIS2                 0x09c
 #define SCTRL_RST_STATUS2              0x0a0
+#define SCTRL_RST_EN3                  0x0a4
 #define SCTRL_RST_DIS3                 0x0a8
 #define SCTRL_RST_STATUS3              0x0ac
 #define SCTRL_ISO_DIS                  0x0c4
@@ -36,6 +39,10 @@
 #define SCTRL_PWR_EN                   0x0d0
 #define SCTRL_PWR_STATUS               0x0d8
 #define SCTRL_PWR_ACK                  0x0dc
+
+/* K3V2 PCTRL uses high-word write masks for the I2C SDA delay controls. */
+#define PCTRL_PERI_CTRL0               0x000
+#define I2C0_ENABLE_DELAY_SDA          0x00010001
 
 /* DesignWare I2C reset bits from Huawei's K3V2 clock definitions. */
 #define RST_I2C0                       BIT(24)
@@ -88,30 +95,68 @@ static u8 hi3620_pmu_ldo_enable(void __iomem *pmu, unsigned int reg,
         return old;
 }
 
-static void hi3620_mediapad_prepare_resets(void __iomem *sctrl)
+static void hi3620_wait_reset(void __iomem *sctrl, u32 status_reg,
+                              u32 mask, bool asserted)
+{
+        unsigned int timeout = 50;
+
+        while (timeout--) {
+                bool state = !!(readl(sctrl + status_reg) & mask);
+
+                if (state == asserted)
+                        return;
+                udelay(1);
+        }
+}
+
+static void hi3620_mediapad_prepare_resets(void __iomem *sctrl,
+                                           void __iomem *pctrl)
 {
         u32 rst2_before = readl(sctrl + SCTRL_RST_STATUS2);
         u32 rst3_before = readl(sctrl + SCTRL_RST_STATUS3);
         u32 clk3_before = readl(sctrl + SCTRL_CLK_STATUS3);
 
-        /* Native I2C0 is needed by BQ27510. I2C2 remains on i2c-gpio for
-         * touchscreen traffic, but release the native master as well. */
-        writel(RST_I2C0 | RST_I2C2, sctrl + SCTRL_RST_DIS2);
+        /* Huawei's K3V2 DesignWare-I2C glue always pulses the controller
+         * reset before use. Merely clearing reset was not enough: BQ27510
+         * registered but every FLAGS/data read failed and PRESENT stayed 0. */
+        writel(RST_I2C0, sctrl + SCTRL_RST_EN2);
+        mb();
+        hi3620_wait_reset(sctrl, SCTRL_RST_STATUS2, RST_I2C0, true);
+        udelay(1);
+        writel(RST_I2C0, sctrl + SCTRL_RST_DIS2);
+        mb();
+        hi3620_wait_reset(sctrl, SCTRL_RST_STATUS2, RST_I2C0, false);
 
-        /* The old temporary MMC clock provider did not guarantee the actual
-         * MMC3 gate was running. Start it before the DW-MSHC internal reset. */
+        /* Vendor common.c enables the I2C0 SDA input delay with this
+         * high-word-masked PCTRL write before the controller is used. */
+        writel(I2C0_ENABLE_DELAY_SDA, pctrl + PCTRL_PERI_CTRL0);
+        mb();
+        udelay(1);
+
+        /* I2C2 remains bit-banged for the working touchscreen; just leave the
+         * unused native block out of reset so it cannot surprise later tests. */
+        writel(RST_I2C2, sctrl + SCTRL_RST_DIS2);
+
+        /* Huawei's clk_mmc3 couples gate bit23 with external reset bit26.
+         * Pulse that reset while the CIU clock is live before DW-MSHC tries
+         * its own CTRL_RESET. The previous deassert-only sequence still left
+         * fcd06000 stuck at ctrl reset 0x2. */
+        writel(RST_MMC3, sctrl + SCTRL_RST_EN3);
+        mb();
+        hi3620_wait_reset(sctrl, SCTRL_RST_STATUS3, RST_MMC3, true);
         writel(CLK_MMC3, sctrl + SCTRL_CLK_EN3);
         mb();
-        udelay(5);
-
+        udelay(10);
         writel(RST_MMC3, sctrl + SCTRL_RST_DIS3);
         mb();
+        hi3620_wait_reset(sctrl, SCTRL_RST_STATUS3, RST_MMC3, false);
         udelay(10);
 
-        pr_info("HI3620-HW-RESET: rst2 %08x->%08x (i2c0=%u i2c2=%u) rst3 %08x->%08x (mmc3_rst=%u) clk3 %08x->%08x (mmc3_clk=%u)\n",
+        pr_info("HI3620-HW-RESET: rst2 %08x->%08x i2c0=%u i2c2=%u pctrl0=%08x rst3 %08x->%08x mmc3_rst=%u clk3 %08x->%08x mmc3_clk=%u\n",
                 rst2_before, readl(sctrl + SCTRL_RST_STATUS2),
                 !!(readl(sctrl + SCTRL_RST_STATUS2) & RST_I2C0),
                 !!(readl(sctrl + SCTRL_RST_STATUS2) & RST_I2C2),
+                readl(pctrl + PCTRL_PERI_CTRL0),
                 rst3_before, readl(sctrl + SCTRL_RST_STATUS3),
                 !!(readl(sctrl + SCTRL_RST_STATUS3) & RST_MMC3),
                 clk3_before, readl(sctrl + SCTRL_CLK_STATUS3),
@@ -158,8 +203,7 @@ static void hi3620_mediapad_prepare_gpu(void __iomem *sctrl,
         udelay(300);
 
         /* Reproduce Huawei vcc_g3d enable sequence. The previous test only
-         * released reset bit14, leaving the core/interface domain isolated.
-         * That produced readable MMIO returning GC0/rev0. */
+         * released reset bit14, leaving the core/interface domain isolated. */
         writel(G3D_POWER_BIT, sctrl + SCTRL_PWR_EN);
         mb();
         udelay(100);
@@ -180,8 +224,6 @@ static void hi3620_mediapad_prepare_gpu(void __iomem *sctrl,
         mb();
         udelay(5);
 
-        /* Huawei removes core reset first, then interface reset, then waits
-         * for more than 128 G3D clock cycles before touching the block. */
         writel(G3D_RST_CORE, sctrl + SCTRL_RST_DIS1);
         mb();
         udelay(1);
@@ -207,6 +249,7 @@ static int __init hi3620_mediapad_hwbringup(void)
 {
         void __iomem *sctrl = NULL;
         void __iomem *pmctrl = NULL;
+        void __iomem *pctrl = NULL;
         void __iomem *pmu = NULL;
 
         if (!of_machine_is_compatible("huawei,s10-101x"))
@@ -214,21 +257,24 @@ static int __init hi3620_mediapad_hwbringup(void)
 
         sctrl = ioremap(HI3620_SCTRL_PHYS, HI3620_MAP_SIZE);
         pmctrl = ioremap(HI3620_PMCTRL_PHYS, HI3620_MAP_SIZE);
+        pctrl = ioremap(HI3620_PCTRL_PHYS, HI3620_MAP_SIZE);
         pmu = ioremap(HI3620_PMUSPI_PHYS, HI3620_MAP_SIZE);
-        if (!sctrl || !pmctrl || !pmu) {
-                pr_err("HI3620-HW: failed to map SCTRL/PMCTRL/PMUSPI\n");
+        if (!sctrl || !pmctrl || !pctrl || !pmu) {
+                pr_err("HI3620-HW: failed to map SCTRL/PMCTRL/PCTRL/PMUSPI\n");
                 goto out;
         }
 
         pr_info("HI3620-HW: MediaPad hardware bring-up start\n");
         hi3620_mediapad_prepare_wifi(pmu);
-        hi3620_mediapad_prepare_resets(sctrl);
+        hi3620_mediapad_prepare_resets(sctrl, pctrl);
         hi3620_mediapad_prepare_gpu(sctrl, pmctrl, pmu);
         pr_info("HI3620-HW: MediaPad hardware bring-up complete\n");
 
 out:
         if (pmu)
                 iounmap(pmu);
+        if (pctrl)
+                iounmap(pctrl);
         if (pmctrl)
                 iounmap(pmctrl);
         if (sctrl)
