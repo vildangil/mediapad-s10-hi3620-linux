@@ -1,0 +1,55 @@
+/*
+ * Huawei MediaPad 10 FHD S10-101x hardware bring-up overlay.
+ *
+ * Keep the known-good board DTS intact and add the newly enabled blocks here
+ * so GPU/battery experiments can be tested without destabilising the baseline.
+ */
+
+#include "hi3620-s10-101x.dts"
+
+/ {
+	/* Vivante GC4000 integrated in Hi3620/K3V2.  Power/clock/reset sequencing
+	 * is temporarily handled by hi3620-hwbringup.c using Huawei's vendor
+	 * sequence.  Etnaviv therefore only needs the core MMIO and interrupt. */
+	gpu: gpu@fa000000 {
+		compatible = "vivante,gc";
+		reg = <0xfa000000 0x00040000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 32 4>;
+		status = "okay";
+	};
+
+	gpu-subsystem {
+		compatible = "fsl,imx-gpu-subsystem";
+		cores = <&gpu>;
+	};
+
+	/* BQ27510 fuel gauge on K3V2 I2C0.  Leave its optional alert IRQ out of
+	 * the first test: bq27xxx polls and exposes capacity/voltage/current via
+	 * power_supply without any board-specific writes to the gauge. */
+	i2c0: i2c@fcb08000 {
+		compatible = "snps,designware-i2c";
+		reg = <0xfcb08000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 28 4>;
+		clocks = <&clock HI3620_I2CCLK0>;
+		clock-frequency = <100000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c0_pins>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		battery@55 {
+			compatible = "ti,bq27510";
+			reg = <0x55>;
+		};
+	};
+};
+
+&pmx0 {
+	/* GPIO84/GPIO85 are I2C0_SCL/I2C0_SDA on IOMG45, function 1. */
+	i2c0_pins: i2c0-pins {
+		pinctrl-single,pins = <0x0b4 0x1>;
+	};
+};
