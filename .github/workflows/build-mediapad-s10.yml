@@ -11,6 +11,7 @@ on:
   push:
     branches:
       - mediapad-s10-hi3620
+      - pmos-hwbringup-20260909
     paths:
       - 'arch/arm/**'
       - 'drivers/**'
@@ -81,7 +82,7 @@ jobs:
           make O=out hi3620_s10_defconfig
           make O=out olddefconfig
 
-          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER)=' out/.config || true
+          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER|DRM|DRM_ETNAVIV|POWER_SUPPLY|BATTERY_BQ27XXX|BATTERY_BQ27XXX_I2C)=' out/.config || true
 
           grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
           grep -q '^CONFIG_ARCH_HISI=y$' out/.config
@@ -95,17 +96,30 @@ jobs:
           grep -q '^CONFIG_SERIAL_AMBA_PL011=y$' out/.config
           grep -q '^CONFIG_SERIAL_AMBA_PL011_CONSOLE=y$' out/.config
           grep -q '^CONFIG_DEBUG_HI3620_UART=y$' out/.config
+          grep -q '^CONFIG_DRM=y$' out/.config
+          grep -q '^CONFIG_DRM_ETNAVIV=y$' out/.config
+          grep -q '^CONFIG_POWER_SUPPLY=y$' out/.config
+          grep -q '^CONFIG_BATTERY_BQ27XXX=y$' out/.config
+          grep -q '^CONFIG_BATTERY_BQ27XXX_I2C=y$' out/.config
 
       - name: Build zImage and MediaPad DTB
         run: |
           make -j"$(nproc)" O=out zImage
-          make -j"$(nproc)" O=out hi3620-s10-101x.dtb
+          if [[ "${GITHUB_REF_NAME}" == "pmos-hwbringup-20260909" ]]; then
+            make -j"$(nproc)" O=out hi3620-s10-101x-hwbringup.dtb
+          else
+            make -j"$(nproc)" O=out hi3620-s10-101x.dtb
+          fi
 
       - name: Create appended-DTB kernel
         run: |
           mkdir -p artifacts
           cp out/arch/arm/boot/zImage artifacts/zImage
-          cp out/arch/arm/boot/dts/hi3620-s10-101x.dtb artifacts/hi3620-s10-101x.dtb
+          if [[ "${GITHUB_REF_NAME}" == "pmos-hwbringup-20260909" ]]; then
+            cp out/arch/arm/boot/dts/hi3620-s10-101x-hwbringup.dtb artifacts/hi3620-s10-101x.dtb
+          else
+            cp out/arch/arm/boot/dts/hi3620-s10-101x.dtb artifacts/hi3620-s10-101x.dtb
+          fi
           cat artifacts/zImage artifacts/hi3620-s10-101x.dtb > artifacts/zImage-dtb
           cp out/.config artifacts/kernel.config
           make -s O=out kernelrelease > artifacts/kernel.release
