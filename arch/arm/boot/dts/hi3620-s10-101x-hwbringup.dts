@@ -47,6 +47,17 @@
 	};
 };
 
+/* The baseline DTS used the temporary MediaPad CIU-clock shim.  That is good
+ * enough for controllers left running by the bootloader, but SDIO/MMC3 starts
+ * clock-gated and its internal CTRL reset never completes.  Use the actual
+ * Hi3620 mmc_clk3 chain so clk_prepare_enable() opens SYSCTRL gate bit 23 and
+ * clk_set_rate() reaches mmc3_div/mux. */
+&wifi_sdio {
+	clocks = <&clock HI3620_MMC_CLK3>,
+		 <&clock HI3620_DDRC_PER_CLK>;
+	clock-names = "ciu", "biu";
+};
+
 &pmx0 {
 	/* GPIO84/GPIO85 are I2C0_SCL/I2C0_SDA on IOMG45, function 1. */
 	i2c0_pins: i2c0-pins {
