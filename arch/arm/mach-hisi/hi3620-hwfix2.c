@@ -2,8 +2,9 @@
 /*
  * Huawei MediaPad 10 FHD S10-101x second-stage hardware bring-up.
  *
- * Keep these experiments board-local.  The eMMC controller and the working
- * simplefb display path are deliberately not touched here.
+ * Keep these experiments board-local.  The eMMC controller, working simplefb
+ * display path and the not-yet-ported ASP audio block are deliberately not
+ * touched here.
  */
 
 #include <linux/bitops.h>
@@ -15,7 +16,6 @@
 
 #define HI3620_SCTRL_PHYS              0xfc802000
 #define HI3620_G3D_PHYS                0xfa000000
-#define HI3620_ASP_PHYS                0xfa100000
 #define HI3620_MAP_SIZE                0x1000
 
 /* SCTRL clock/reset registers. */
@@ -49,7 +49,7 @@
 #define MMC3_PLL2_DIV16_WRITE          \
         ((MMC3_DIV_MUX_MASK << 16) | MMC3_PLL2_DIV16_VALUE)
 
-/* Vivante registers.  Huawei galcore writes 0x900 to CLOCK_CONTROL before
+/* Vivante registers. Huawei galcore writes 0x900 to CLOCK_CONTROL before
  * _IdentifyHardware(); Linux 4.9 Etnaviv identifies first and therefore never
  * reaches etnaviv_hw_reset() when the power-on value reads as zero.
  */
@@ -95,14 +95,14 @@ static void hi3620_hwfix2_mmc3(void __iomem *sctrl)
         u32 clk_before = readl(sctrl + SCTRL_CLK_STATUS3);
         u32 rst_before = readl(sctrl + SCTRL_RST_STATUS3);
 
-        /* Only MMC3/SDIO is changed.  MMC1/eMMC lives in DIV_REG2 and is left
+        /* Only MMC3/SDIO is changed. MMC1/eMMC lives in DIV_REG2 and is left
          * exactly as the bootloader/known-good kernel configured it.
          */
         writel(MMC3_PLL2_DIV16_WRITE, sctrl + SCTRL_DIV_REG14);
         mb();
         udelay(2);
 
-        /* Vendor clk_mmc3 has clk_ddrc_per as a friend clock.  It must be live
+        /* Vendor clk_mmc3 has clk_ddrc_per as a friend clock. It must be live
          * before the DesignWare block's internal FIFO reset can complete.
          */
         writel(CLK_DDRC_PER | CLK_MMC3, sctrl + SCTRL_CLK_EN3);
@@ -133,8 +133,7 @@ static void hi3620_hwfix2_gpu(void __iomem *sctrl, void __iomem *g3d)
         u32 model = model_before;
 
         /* This is the missing vendor step between SetGPUPower(TRUE, TRUE) and
-         * _IdentifyHardware().  Do it before the Etnaviv platform device is
-         * probed so Linux 4.9 sees the actual GC4000 identity.
+         * _IdentifyHardware(). Do it before the Etnaviv platform driver runs.
          */
         writel(G3D_VENDOR_WAKE, g3d + G3D_HI_CLOCK_CONTROL);
         mb();
@@ -153,38 +152,22 @@ static void hi3620_hwfix2_gpu(void __iomem *sctrl, void __iomem *g3d)
                 readl(g3d + G3D_HI_CHIP_REV),
                 readl(g3d + G3D_HI_CHIP_IDENTITY),
                 readl(g3d + G3D_HI_CHIP_FEATURE),
-                readl(g3d + G3D_HI_IDLE_STATE), poll + 1);
-}
-
-static void hi3620_hwfix2_audio_diag(void __iomem *sctrl, void __iomem *asp)
-{
-        /* The old Huawei ASoC stack is not in this 4.9 tree yet.  Keep this
-         * read-only: it tells the next port whether ASP is clocked/alive without
-         * inventing a fake simple-audio-card or touching codec analogue rails.
-         */
-        pr_info("HI3620-HWFIX2-AUDIO: clk3=%08x rst3=%08x asp=%08x/%08x/%08x/%08x\n",
-                readl(sctrl + SCTRL_CLK_STATUS3),
-                readl(sctrl + SCTRL_RST_STATUS3),
-                readl(asp + 0x00), readl(asp + 0x04),
-                readl(asp + 0x08), readl(asp + 0x0c));
+                readl(g3d + G3D_HI_IDLE_STATE),
+                poll < 100 ? poll + 1 : 100);
 }
 
 static int __init hi3620_mediapad_hwfix2(void)
 {
         void __iomem *sctrl;
         void __iomem *g3d;
-        void __iomem *asp;
 
         if (!of_machine_is_compatible("huawei,s10-101x"))
                 return 0;
 
         sctrl = ioremap(HI3620_SCTRL_PHYS, HI3620_MAP_SIZE);
         g3d = ioremap(HI3620_G3D_PHYS, HI3620_MAP_SIZE);
-        asp = ioremap(HI3620_ASP_PHYS, HI3620_MAP_SIZE);
-        if (!sctrl || !g3d || !asp) {
-                pr_err("HI3620-HWFIX2: failed to map SCTRL/G3D/ASP\n");
-                if (asp)
-                        iounmap(asp);
+        if (!sctrl || !g3d) {
+                pr_err("HI3620-HWFIX2: failed to map SCTRL/G3D\n");
                 if (g3d)
                         iounmap(g3d);
                 if (sctrl)
@@ -196,10 +179,8 @@ static int __init hi3620_mediapad_hwfix2(void)
         hi3620_hwfix2_i2c0(sctrl);
         hi3620_hwfix2_mmc3(sctrl);
         hi3620_hwfix2_gpu(sctrl, g3d);
-        hi3620_hwfix2_audio_diag(sctrl, asp);
         pr_info("HI3620-HWFIX2: second-stage bring-up done\n");
 
-        iounmap(asp);
         iounmap(g3d);
         iounmap(sctrl);
         return 0;
