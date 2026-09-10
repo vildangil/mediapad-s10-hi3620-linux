@@ -76,6 +76,38 @@ jobs:
           p.write_text(s.replace(old, new))
           PY
 
+          # MediaPad-specific safety guard.  Linux 4.9 Etnaviv's master can
+          # register /dev/dri/card0 even after etnaviv_gpu_init rejects GC0.
+          # The board helper wakes the core before device_initcall; if the raw
+          # CHIP_MODEL is still zero at GPU probe, refuse the component so the
+          # otherwise working fbdev/Xorg path is not poisoned by a dead DRM
+          # device.  Keep this runtime-gated to the S10 machine only.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('drivers/gpu/drm/etnaviv/etnaviv_gpu.c')
+          s = p.read_text()
+          inc = '#include <linux/moduleparam.h>\n'
+          if '#include <linux/of.h>\n' not in s:
+              if inc not in s:
+                  raise SystemExit('Etnaviv include anchor not found')
+              s = s.replace(inc, inc + '#include <linux/of.h>\n#include <linux/io.h>\n', 1)
+          anchor = '''\tgpu->mmio = etnaviv_ioremap(pdev, NULL, dev_name(gpu->dev));
+\tif (IS_ERR(gpu->mmio))
+\t\treturn PTR_ERR(gpu->mmio);
+'''
+          guard = anchor + '''
+\tif (of_machine_is_compatible("huawei,s10-101x") &&
+\t    readl(gpu->mmio + VIVS_HI_CHIP_MODEL) == 0) {
+\t\tdev_err(dev, "MediaPad GC4000 identity is still zero; refusing dead DRM component\\n");
+\t\treturn -ENODEV;
+\t}
+'''
+          if anchor not in s:
+              raise SystemExit('Etnaviv MMIO anchor not found')
+          s = s.replace(anchor, guard, 1)
+          p.write_text(s)
+          PY
+
       - name: Configure MediaPad Hi3620 kernel
         run: |
           mkdir -p out
