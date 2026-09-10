@@ -37,6 +37,14 @@ CONFIG_CGROUPS=y
 CONFIG_CGROUP_FREEZER=y
 CONFIG_CGROUP_DEVICE=y
 
+# Modern GTK/glycin uses bubblewrap for image-loader sandboxing. The XFCE
+# rootfs invokes bwrap with --unshare-all and --seccomp; without user
+# namespaces/seccomp the loader exits before GTK can render application icons.
+CONFIG_NAMESPACES=y
+CONFIG_USER_NS=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+
 CONFIG_INPUT=y
 CONFIG_INPUT_EVDEV=y
 CONFIG_INPUT_KEYBOARD=y
