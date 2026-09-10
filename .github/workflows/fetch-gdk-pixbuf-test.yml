@@ -1,0 +1,35 @@
+name: Fetch ARMv7 pre-Glycin gdk-pixbuf
+
+on:
+  push:
+    branches:
+      - pmos-hwbringup-20260909
+    paths:
+      - '.github/workflows/fetch-gdk-pixbuf-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fetch Alpine 3.23 ARMv7 gdk-pixbuf
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifact
+          url='https://dl-cdn.alpinelinux.org/alpine/v3.23/main/armv7/gdk-pixbuf-2.44.4-r0.apk'
+          curl --fail --location --retry 5 --retry-delay 2 --retry-all-errors \
+            "$url" -o artifact/gdk-pixbuf-2.44.4-r0.armv7.apk
+          test -s artifact/gdk-pixbuf-2.44.4-r0.armv7.apk
+          file artifact/gdk-pixbuf-2.44.4-r0.armv7.apk
+          sha256sum artifact/gdk-pixbuf-2.44.4-r0.armv7.apk | tee artifact/SHA256SUMS
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdk-pixbuf-2.44.4-r0-armv7
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 7
