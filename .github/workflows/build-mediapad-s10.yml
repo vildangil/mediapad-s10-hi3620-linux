@@ -76,6 +76,34 @@ jobs:
           p.write_text(s.replace(old, new))
           PY
 
+          # Huawei's tablet firmware exposes the BQ27510 command map used by
+          # k3_bq27510.c: RemainingCapacity=0x10 and SOC=0x2c.  Linux 4.9's
+          # generic BQ27510 table uses 0x0c/0x20, which produced impossible
+          # capacity readings even after the I2C bus itself started working.
+          # Keep this build-time quirk on the MediaPad hwbringup branch.
+          if [[ "${GITHUB_REF_NAME}" == "pmos-hwbringup-20260909" ]]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('drivers/power/supply/bq27xxx_battery.c')
+          s = p.read_text()
+          begin = s.index('\t[BQ27510] = {')
+          end = s.index('\n\t[BQ27530] = {', begin)
+          block = s[begin:end]
+          replacements = {
+              '\t\t[BQ27XXX_REG_TTF] = INVALID_REG_ADDR,': '\t\t[BQ27XXX_REG_TTF] = 0x18,',
+              '\t\t[BQ27XXX_REG_NAC] = 0x0c,': '\t\t[BQ27XXX_REG_NAC] = 0x10,',
+              '\t\t[BQ27XXX_REG_SOC] = 0x20,': '\t\t[BQ27XXX_REG_SOC] = 0x2c,',
+              '\t\t[BQ27XXX_REG_DCAP] = 0x2e,': '\t\t[BQ27XXX_REG_DCAP] = INVALID_REG_ADDR,',
+          }
+          for old, new in replacements.items():
+              if block.count(old) != 1:
+                  raise SystemExit(f'BQ27510 map anchor mismatch: {old!r}')
+              block = block.replace(old, new, 1)
+          s = s[:begin] + block + s[end:]
+          p.write_text(s)
+          PY
+          fi
+
           # MediaPad-specific safety guard. Linux 4.9 Etnaviv's master can
           # register /dev/dri/card0 even after etnaviv_gpu_init rejects GC0.
           # The board helper wakes the core before device_initcall; if the raw
