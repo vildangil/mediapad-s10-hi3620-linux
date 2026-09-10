@@ -18,6 +18,7 @@
 #define HI3620_PMCTRL_PHYS             0xfca08000
 #define HI3620_PCTRL_PHYS              0xfca09000
 #define HI3620_PMUSPI_PHYS             0xfcc00000
+#define HI3620_G3D_PHYS                0xfa000000
 #define HI3620_MAP_SIZE                0x1000
 
 /* SYSCTRL clock/reset/power registers from Huawei K3V2. */
@@ -65,6 +66,17 @@
 #define PMCTRL_G3D_CORE_DIV            0x0b8
 #define PMCTRL_G3D_SHADER_DIV          0x0bc
 #define G3D_DIV_EN_VAL                 ((0x0b << 7) | 0x0b)
+
+/* Vivante HI registers used by both the vendor galcore and Etnaviv. */
+#define G3D_HI_CLOCK_CONTROL           0x000
+#define G3D_HI_IDLE_STATE              0x004
+#define G3D_HI_CHIP_IDENTITY           0x018
+#define G3D_HI_CHIP_FEATURE            0x01c
+#define G3D_HI_CHIP_MODEL              0x020
+#define G3D_HI_CHIP_REV                0x024
+#define G3D_HI_CHIP_DATE               0x028
+#define G3D_HI_CHIP_TIME               0x02c
+#define G3D_HI_CHIP_MINOR_FEATURE0     0x034
 
 /* HI6421V200 PMU registers are byte-wide on a 32-bit-spaced PMUSPI window. */
 #define PMU_BUCK2_CTRL                 (0x10 << 2)
@@ -139,8 +151,7 @@ static void hi3620_mediapad_prepare_resets(void __iomem *sctrl,
 
         /* Huawei's clk_mmc3 couples gate bit23 with external reset bit26.
          * Pulse that reset while the CIU clock is live before DW-MSHC tries
-         * its own CTRL_RESET. The previous deassert-only sequence still left
-         * fcd06000 stuck at ctrl reset 0x2. */
+         * its own CTRL_RESET. */
         writel(RST_MMC3, sctrl + SCTRL_RST_EN3);
         mb();
         hi3620_wait_reset(sctrl, SCTRL_RST_STATUS3, RST_MMC3, true);
@@ -183,9 +194,27 @@ static void hi3620_mediapad_prepare_wifi(void __iomem *pmu)
                 clk32_old, readb(pmu + PMU_32K_EN));
 }
 
+static void hi3620_mediapad_dump_gpu(void __iomem *g3d)
+{
+        /* Keep this read-only.  The Etnaviv node is disabled while the raw
+         * identity is zero, so a bad DRM node cannot poison Mesa/X.  These
+         * offsets are identical in Huawei's galcore and Etnaviv state_hi. */
+        pr_info("HI3620-GPU-ID: clock=%08x idle=%08x identity=%08x feature=%08x model=%08x rev=%08x date=%08x time=%08x minor0=%08x\n",
+                readl(g3d + G3D_HI_CLOCK_CONTROL),
+                readl(g3d + G3D_HI_IDLE_STATE),
+                readl(g3d + G3D_HI_CHIP_IDENTITY),
+                readl(g3d + G3D_HI_CHIP_FEATURE),
+                readl(g3d + G3D_HI_CHIP_MODEL),
+                readl(g3d + G3D_HI_CHIP_REV),
+                readl(g3d + G3D_HI_CHIP_DATE),
+                readl(g3d + G3D_HI_CHIP_TIME),
+                readl(g3d + G3D_HI_CHIP_MINOR_FEATURE0));
+}
+
 static void hi3620_mediapad_prepare_gpu(void __iomem *sctrl,
                                         void __iomem *pmctrl,
-                                        void __iomem *pmu)
+                                        void __iomem *pmu,
+                                        void __iomem *g3d)
 {
         u8 buck2_ctrl_old = readb(pmu + PMU_BUCK2_CTRL);
         u8 buck2_vset_old = readb(pmu + PMU_BUCK2_VSET);
@@ -202,8 +231,7 @@ static void hi3620_mediapad_prepare_gpu(void __iomem *sctrl,
         mb();
         udelay(300);
 
-        /* Reproduce Huawei vcc_g3d enable sequence. The previous test only
-         * released reset bit14, leaving the core/interface domain isolated. */
+        /* Reproduce Huawei vcc_g3d enable sequence. */
         writel(G3D_POWER_BIT, sctrl + SCTRL_PWR_EN);
         mb();
         udelay(100);
@@ -243,6 +271,8 @@ static void hi3620_mediapad_prepare_gpu(void __iomem *sctrl,
                 readl(sctrl + SCTRL_CLK_STATUS1),
                 readl(sctrl + SCTRL_CLK_STATUS3),
                 rst1_before, readl(sctrl + SCTRL_RST_STATUS1));
+
+        hi3620_mediapad_dump_gpu(g3d);
 }
 
 static int __init hi3620_mediapad_hwbringup(void)
@@ -251,6 +281,7 @@ static int __init hi3620_mediapad_hwbringup(void)
         void __iomem *pmctrl = NULL;
         void __iomem *pctrl = NULL;
         void __iomem *pmu = NULL;
+        void __iomem *g3d = NULL;
 
         if (!of_machine_is_compatible("huawei,s10-101x"))
                 return 0;
@@ -259,18 +290,21 @@ static int __init hi3620_mediapad_hwbringup(void)
         pmctrl = ioremap(HI3620_PMCTRL_PHYS, HI3620_MAP_SIZE);
         pctrl = ioremap(HI3620_PCTRL_PHYS, HI3620_MAP_SIZE);
         pmu = ioremap(HI3620_PMUSPI_PHYS, HI3620_MAP_SIZE);
-        if (!sctrl || !pmctrl || !pctrl || !pmu) {
-                pr_err("HI3620-HW: failed to map SCTRL/PMCTRL/PCTRL/PMUSPI\n");
+        g3d = ioremap(HI3620_G3D_PHYS, HI3620_MAP_SIZE);
+        if (!sctrl || !pmctrl || !pctrl || !pmu || !g3d) {
+                pr_err("HI3620-HW: failed to map SCTRL/PMCTRL/PCTRL/PMUSPI/G3D\n");
                 goto out;
         }
 
         pr_info("HI3620-HW: MediaPad hardware bring-up start\n");
         hi3620_mediapad_prepare_wifi(pmu);
         hi3620_mediapad_prepare_resets(sctrl, pctrl);
-        hi3620_mediapad_prepare_gpu(sctrl, pmctrl, pmu);
+        hi3620_mediapad_prepare_gpu(sctrl, pmctrl, pmu, g3d);
         pr_info("HI3620-HW: MediaPad hardware bring-up complete\n");
 
 out:
+        if (g3d)
+                iounmap(g3d);
         if (pmu)
                 iounmap(pmu);
         if (pctrl)
