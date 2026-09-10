@@ -9,10 +9,12 @@
  */
 
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/mfd/syscon.h>
 #include <linux/mmc/host.h>
 #include <linux/mmc/dw_mmc.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -38,6 +40,64 @@ static unsigned long dw_mci_hi6220_caps[] = {
 	0
 };
 
+/*
+ * Huawei's K3V2 vendor MSHCI driver does not assert CTRL_RESET,
+ * FIFO_RESET and DMA_RESET together.  It resets the three blocks in that
+ * order and waits for each bit to self-clear before moving on.  The generic
+ * DesignWare probe resets all three at once; on a cold MediaPad controller
+ * (notably SDIO1/MMC3 at fcd06000) FIFO_RESET then remains set forever.
+ *
+ * Run the vendor sequence once after the K3 clocks are live and before the
+ * generic probe performs its normal reset.  Keep the workaround strictly
+ * board-scoped while bring-up is in progress.
+ */
+static int dw_mci_k3_reset_one(struct dw_mci *host, u32 reset,
+				const char *name)
+{
+	unsigned int timeout = 100;
+	u32 ctrl;
+
+	ctrl = mci_readl(host, CTRL);
+	mci_writel(host, CTRL, ctrl | reset);
+
+	while (mci_readl(host, CTRL) & reset) {
+		if (!--timeout) {
+			dev_err(host->dev,
+				"MediaPad sequential %s reset timed out (CTRL=%08x)\n",
+				name, mci_readl(host, CTRL));
+			return -ETIMEDOUT;
+		}
+		mdelay(1);
+	}
+
+	return 0;
+}
+
+static int dw_mci_k3_init(struct dw_mci *host)
+{
+	int ret;
+
+	if (!of_machine_is_compatible("huawei,s10-101x"))
+		return 0;
+
+	dev_info(host->dev, "MediaPad K3V2 sequential controller reset\n");
+
+	ret = dw_mci_k3_reset_one(host, SDMMC_CTRL_RESET, "controller");
+	if (ret)
+		return ret;
+
+	ret = dw_mci_k3_reset_one(host, SDMMC_CTRL_FIFO_RESET, "FIFO");
+	if (ret)
+		return ret;
+
+	ret = dw_mci_k3_reset_one(host, SDMMC_CTRL_DMA_RESET, "DMA");
+	if (ret)
+		return ret;
+
+	dev_info(host->dev, "MediaPad K3V2 sequential controller reset complete\n");
+	return 0;
+}
+
 static void dw_mci_k3_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 {
 	int ret;
@@ -50,6 +110,7 @@ static void dw_mci_k3_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 }
 
 static const struct dw_mci_drv_data k3_drv_data = {
+	.init			= dw_mci_k3_init,
 	.set_ios		= dw_mci_k3_set_ios,
 };
 
