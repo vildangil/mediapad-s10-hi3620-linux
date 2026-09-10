@@ -7,13 +7,21 @@
 
 / {
 	/* Vivante GC4000 integrated in Hi3620/K3V2. Power/clock/reset sequencing
-	 * is temporarily handled by hi3620-hwbringup.c. */
+	 * is temporarily handled by hi3620-hwbringup.c.
+	 *
+	 * Keep Etnaviv detached from userspace until the raw Vivante identity
+	 * registers read correctly.  When the 4.9 Etnaviv driver binds while the
+	 * core reports GC0/rev0 it still creates /dev/dri/card0; Mesa/X then picks
+	 * that unusable DRM device and the otherwise working simplefb cursor can
+	 * disappear.  hi3620-hwbringup.c continues powering the block and dumping
+	 * its ID registers so this does not hide the GPU bring-up problem.
+	 */
 	gpu: gpu@fa000000 {
 		compatible = "vivante,gc";
 		reg = <0xfa000000 0x00040000>;
 		interrupt-parent = <&gic>;
 		interrupts = <0 32 4>;
-		status = "okay";
+		status = "disabled";
 	};
 
 	gpu-subsystem {
@@ -43,7 +51,8 @@
 		};
 	};
 
-	/* BQ27510 fuel gauge on K3V2 I2C0. */
+	/* BQ27510 fuel gauge on K3V2 I2C0.  The controller needs both the
+	 * IOMG mux and the IOCFG electrical configuration, matching Hi4511. */
 	i2c0: i2c@fcb08000 {
 		compatible = "snps,designware-i2c";
 		reg = <0xfcb08000 0x1000>;
@@ -52,7 +61,7 @@
 		clocks = <&clock HI3620_I2CCLK0>;
 		clock-frequency = <100000>;
 		pinctrl-names = "default";
-		pinctrl-0 = <&i2c0_pins>;
+		pinctrl-0 = <&i2c0_pins &i2c0_cfg>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 		status = "okay";
@@ -64,12 +73,9 @@
 	};
 };
 
-/* Use the actual Hi3620 mmc_clk3 chain for BCM4330 SDIO. */
-&wifi_sdio {
-	clocks = <&clock HI3620_MMC_CLK3>,
-		 <&clock HI3620_DDRC_PER_CLK>;
-	clock-names = "ciu", "biu";
-};
+/* Do not replace MMC3's CIU clock with the plain gate clock here.  The base
+ * S10 tree intentionally uses HI3620_MMC_CIUCLK3, whose PCTRL sample/drive/
+ * divider programming is required by the K3V2 DesignWare-MSHC block. */
 
 &pmx0 {
 	/* Important: pinctrl-single's Hi3620 gpio-ranges marks mux value 1 as
@@ -78,5 +84,20 @@
 	 * Select function 0 here so GPIO84/85 are driven by native I2C0. */
 	i2c0_pins: i2c0-pins {
 		pinctrl-single,pins = <0x0b4 0x0>;
+	};
+};
+
+&pmx1 {
+	/* Exact I2C0 IOCFG settings from the Hi3620/Hi4511 reference board.
+	 * Without this second pinctrl group I2C0 probes after a defer but the
+	 * BQ27510 traffic repeatedly loses arbitration/times out (-110/-121). */
+	i2c0_cfg: i2c0-cfg {
+		pinctrl-single,pins = <
+			0x17c 0	/* I2C0_SCL (IOCFG103) */
+			0x180 0	/* I2C0_SDA (IOCFG104) */
+		>;
+		pinctrl-single,bias-pulldown = <0 2 0 2>;
+		pinctrl-single,bias-pullup = <0 1 0 1>;
+		pinctrl-single,drive-strength = <0x30 0xf0>;
 	};
 };
