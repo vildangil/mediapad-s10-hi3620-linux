@@ -19,10 +19,15 @@
 #define HI3620_MAP_SIZE                0x1000
 
 /* SCTRL clock/reset registers. */
+#define SCTRL_CLK_EN1                  0x030
+#define SCTRL_CLK_STATUS1              0x03c
 #define SCTRL_CLK_EN2                  0x040
 #define SCTRL_CLK_STATUS2              0x04c
 #define SCTRL_CLK_EN3                  0x050
 #define SCTRL_CLK_STATUS3              0x05c
+#define SCTRL_RST_EN1                  0x08c
+#define SCTRL_RST_DIS1                 0x090
+#define SCTRL_RST_STATUS1              0x094
 #define SCTRL_RST_EN2                  0x098
 #define SCTRL_RST_DIS2                 0x09c
 #define SCTRL_RST_STATUS2              0x0a0
@@ -30,14 +35,40 @@
 #define SCTRL_RST_DIS3                 0x0a8
 #define SCTRL_RST_STATUS3              0x0ac
 #define SCTRL_DIV_REG0                 0x100
+#define SCTRL_DIV_REG2                 0x108
 #define SCTRL_DIV_REG14                0x140
+
+/* Huawei CS clock tree: select PLL2 for CFGAXI, then divide 1440 MHz by
+ * 15 * 2 = 30 => 48 MHz.  These are the exact high-word-mask writes used by
+ * k3v2_cfgaxi_clk_enable() in the vendor kernel.  The old mainline Hi3620 CCF
+ * describes rclk_cfgaxi as 48 MHz but never programs these hardware bits; the
+ * boot log showed 0x8024 instead of the vendor 0x802e state.
+ */
+#define CFGAXI_SEL_VALUE               0x80008000
+#define CFGAXI_NORMAL_DIV_VALUE        0x007f002e
+
+#define CLK_G3D                        BIT(0)
+#define CLK_DDRC_GPU                   BIT(4)
+#define RST_G3D_CORE                   (BIT(0) | BIT(13) | BIT(14))
+#define RST_G3D_INTF                   BIT(1)
+#define RST_G3D_ALL                    (RST_G3D_CORE | RST_G3D_INTF)
 
 #define CLK_I2C0                       BIT(24)
 #define RST_I2C0                       BIT(24)
 
 #define CLK_DDRC_PER                   BIT(9)
+#define CLK_SD                         BIT(20)
+#define RST_SD                         BIT(23)
 #define CLK_MMC3                       BIT(23)
 #define RST_MMC3                       BIT(26)
+
+/* DIV_REG2: SD divider bits 3:0, source mux bit 4.  Huawei clk_sd_cs uses
+ * PLL23_16DIV with PLL2 selector 0 and divider 15 for PLL2 / 16 = 90 MHz.
+ */
+#define SD_DIV_MUX_MASK                GENMASK(4, 0)
+#define SD_PLL2_DIV16_VALUE            15
+#define SD_PLL2_DIV16_WRITE            \
+        ((SD_DIV_MUX_MASK << 16) | SD_PLL2_DIV16_VALUE)
 
 /* DIV_REG14: MMC3 divider is bits 8:5; source mux is bit 9.
  * Hi3620 divider/source registers use the upper 16 bits as write enables.
@@ -61,20 +92,32 @@
 #define G3D_HI_CHIP_REV                0x024
 #define G3D_VENDOR_WAKE                0x00000900
 
+static void hi3620_hwfix2_cfgaxi(void __iomem *sctrl)
+{
+        u32 before = readl(sctrl + SCTRL_DIV_REG0);
+        u32 after;
+
+        writel(CFGAXI_SEL_VALUE, sctrl + SCTRL_DIV_REG0);
+        mb();
+        writel(CFGAXI_NORMAL_DIV_VALUE, sctrl + SCTRL_DIV_REG0);
+        mb();
+        udelay(5);
+        after = readl(sctrl + SCTRL_DIV_REG0);
+
+        pr_info("HI3620-HWFIX2-CFGAXI: div0=%08x->%08x expected_low=0000802e\n",
+                before, after);
+}
+
 static void hi3620_hwfix2_i2c0(void __iomem *sctrl)
 {
         u32 clk_before = readl(sctrl + SCTRL_CLK_STATUS2);
         u32 rst_before = readl(sctrl + SCTRL_RST_STATUS2);
 
-        /* Vendor clk_i2c0 is sourced from CFGAXI (48 MHz on CS silicon), not
-         * the 26 MHz pclk currently described by the old mainline clock tree.
-         * The DT uses a 48 MHz fixed rate for timing; keep the real gate here.
-         */
         writel(CLK_I2C0, sctrl + SCTRL_CLK_EN2);
         mb();
         udelay(2);
 
-        /* Re-pulse reset after the clock is unquestionably live. */
+        /* Re-pulse reset after CFGAXI is at the real vendor 48 MHz rate. */
         writel(RST_I2C0, sctrl + SCTRL_RST_EN2);
         mb();
         udelay(2);
@@ -89,22 +132,46 @@ static void hi3620_hwfix2_i2c0(void __iomem *sctrl)
                 !!(readl(sctrl + SCTRL_RST_STATUS2) & RST_I2C0));
 }
 
+static void hi3620_hwfix2_sd(void __iomem *sctrl)
+{
+        u32 div_before = readl(sctrl + SCTRL_DIV_REG2);
+        u32 clk_before = readl(sctrl + SCTRL_CLK_STATUS3);
+        u32 rst_before = readl(sctrl + SCTRL_RST_STATUS3);
+
+        writel(SD_PLL2_DIV16_WRITE, sctrl + SCTRL_DIV_REG2);
+        mb();
+        writel(CLK_DDRC_PER | CLK_SD, sctrl + SCTRL_CLK_EN3);
+        mb();
+        udelay(10);
+        writel(RST_SD, sctrl + SCTRL_RST_EN3);
+        mb();
+        udelay(10);
+        writel(RST_SD, sctrl + SCTRL_RST_DIS3);
+        mb();
+        udelay(20);
+
+        pr_info("HI3620-HWFIX2-SD: div2=%08x->%08x clk3=%08x->%08x rst3=%08x->%08x ddrc_per=%u sd=%u rst=%u\n",
+                div_before, readl(sctrl + SCTRL_DIV_REG2),
+                clk_before, readl(sctrl + SCTRL_CLK_STATUS3),
+                rst_before, readl(sctrl + SCTRL_RST_STATUS3),
+                !!(readl(sctrl + SCTRL_CLK_STATUS3) & CLK_DDRC_PER),
+                !!(readl(sctrl + SCTRL_CLK_STATUS3) & CLK_SD),
+                !!(readl(sctrl + SCTRL_RST_STATUS3) & RST_SD));
+}
+
 static void hi3620_hwfix2_mmc3(void __iomem *sctrl)
 {
         u32 div_before = readl(sctrl + SCTRL_DIV_REG14);
         u32 clk_before = readl(sctrl + SCTRL_CLK_STATUS3);
         u32 rst_before = readl(sctrl + SCTRL_RST_STATUS3);
 
-        /* Only MMC3/SDIO is changed. MMC1/eMMC lives in DIV_REG2 and is left
-         * exactly as the bootloader/known-good kernel configured it.
+        /* Only MMC3/SDIO is changed. MMC1/eMMC lives in DIV_REG2 bits 5+
+         * and is left exactly as the bootloader/known-good kernel configured it.
          */
         writel(MMC3_PLL2_DIV16_WRITE, sctrl + SCTRL_DIV_REG14);
         mb();
         udelay(2);
 
-        /* Vendor clk_mmc3 has clk_ddrc_per as a friend clock. It must be live
-         * before the DesignWare block's internal FIFO reset can complete.
-         */
         writel(CLK_DDRC_PER | CLK_MMC3, sctrl + SCTRL_CLK_EN3);
         mb();
         udelay(10);
@@ -127,14 +194,32 @@ static void hi3620_hwfix2_mmc3(void __iomem *sctrl)
 
 static void hi3620_hwfix2_gpu(void __iomem *sctrl, void __iomem *g3d)
 {
-        u32 model_before = readl(g3d + G3D_HI_CHIP_MODEL);
-        u32 clock_before = readl(g3d + G3D_HI_CLOCK_CONTROL);
+        u32 model_before;
+        u32 clock_before;
+        u32 model;
         unsigned int poll;
-        u32 model = model_before;
 
-        /* This is the missing vendor step between SetGPUPower(TRUE, TRUE) and
-         * _IdentifyHardware(). Do it before the Etnaviv platform driver runs.
+        /* CFGAXI changed after the first-stage Huawei power sequence.  Re-sync
+         * the G3D AXI interface using the exact vendor reset ordering while
+         * keeping the already-enabled MTCMOS/isolation state intact.
          */
+        writel(CLK_G3D, sctrl + SCTRL_CLK_EN1);
+        writel(CLK_DDRC_GPU, sctrl + SCTRL_CLK_EN3);
+        mb();
+        writel(RST_G3D_ALL, sctrl + SCTRL_RST_EN1);
+        mb();
+        udelay(5);
+        writel(RST_G3D_CORE, sctrl + SCTRL_RST_DIS1);
+        mb();
+        udelay(1);
+        writel(RST_G3D_INTF, sctrl + SCTRL_RST_DIS1);
+        mb();
+        udelay(20);
+
+        model_before = readl(g3d + G3D_HI_CHIP_MODEL);
+        clock_before = readl(g3d + G3D_HI_CLOCK_CONTROL);
+        model = model_before;
+
         writel(G3D_VENDOR_WAKE, g3d + G3D_HI_CLOCK_CONTROL);
         mb();
 
@@ -145,8 +230,11 @@ static void hi3620_hwfix2_gpu(void __iomem *sctrl, void __iomem *g3d)
                         break;
         }
 
-        pr_info("HI3620-HWFIX2-GPU: cfgaxi_div0=%08x clock=%08x->%08x model=%08x->%08x rev=%08x identity=%08x feature=%08x idle=%08x polls=%u\n",
+        pr_info("HI3620-HWFIX2-GPU: cfgaxi_div0=%08x clk1=%08x clk3=%08x rst1=%08x clock=%08x->%08x model=%08x->%08x rev=%08x identity=%08x feature=%08x idle=%08x polls=%u\n",
                 readl(sctrl + SCTRL_DIV_REG0),
+                readl(sctrl + SCTRL_CLK_STATUS1),
+                readl(sctrl + SCTRL_CLK_STATUS3),
+                readl(sctrl + SCTRL_RST_STATUS1),
                 clock_before, readl(g3d + G3D_HI_CLOCK_CONTROL),
                 model_before, model,
                 readl(g3d + G3D_HI_CHIP_REV),
@@ -176,7 +264,9 @@ static int __init hi3620_mediapad_hwfix2(void)
         }
 
         pr_info("HI3620-HWFIX2: second-stage bring-up start\n");
+        hi3620_hwfix2_cfgaxi(sctrl);
         hi3620_hwfix2_i2c0(sctrl);
+        hi3620_hwfix2_sd(sctrl);
         hi3620_hwfix2_mmc3(sctrl);
         hi3620_hwfix2_gpu(sctrl, g3d);
         pr_info("HI3620-HWFIX2: second-stage bring-up done\n");
