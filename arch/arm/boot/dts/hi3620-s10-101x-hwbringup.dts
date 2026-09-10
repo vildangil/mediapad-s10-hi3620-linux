@@ -6,22 +6,31 @@
 #include <dt-bindings/input/input.h>
 
 / {
-	/* Vivante GC4000 integrated in Hi3620/K3V2. Power/clock/reset sequencing
-	 * is temporarily handled by hi3620-hwbringup.c.
-	 *
-	 * Keep Etnaviv detached from userspace until the raw Vivante identity
-	 * registers read correctly.  When the 4.9 Etnaviv driver binds while the
-	 * core reports GC0/rev0 it still creates /dev/dri/card0; Mesa/X then picks
-	 * that unusable DRM device and the otherwise working simplefb cursor can
-	 * disappear.  hi3620-hwbringup.c continues powering the block and dumping
-	 * its ID registers so this does not hide the GPU bring-up problem.
+	/*
+	 * Huawei's CS clock tree sources I2C0 from CFGAXI at 48 MHz.  The old
+	 * mainline Hi3620 clock description incorrectly reports pclk/26 MHz for
+	 * this gate, causing DesignWare to program the wrong SCL high/low counts.
+	 * hi3620-hwfix2.c keeps the real SCTRL gate/reset under board control;
+	 * this fixed clock only supplies the correct input rate to the I2C core.
+	 */
+	i2c0_refclk: i2c0-refclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <48000000>;
+	};
+
+	/* Vivante GC4000 integrated in Hi3620/K3V2.  The first-stage helper
+	 * supplies the vendor external power/clock/reset sequence.  The second
+	 * stage now performs Huawei galcore's missing pre-identify write of 0x900
+	 * to HI_CLOCK_CONTROL before Etnaviv probes, so this test can safely ask
+	 * the real core for its identity rather than accepting the power-on GC0.
 	 */
 	gpu: gpu@fa000000 {
 		compatible = "vivante,gc";
 		reg = <0xfa000000 0x00040000>;
 		interrupt-parent = <&gic>;
 		interrupts = <0 32 4>;
-		status = "disabled";
+		status = "okay";
 	};
 
 	gpu-subsystem {
@@ -51,14 +60,14 @@
 		};
 	};
 
-	/* BQ27510 fuel gauge on K3V2 I2C0.  The controller needs both the
-	 * IOMG mux and the IOCFG electrical configuration, matching Hi4511. */
+	/* BQ27510 fuel gauge on K3V2 I2C0.  The controller needs the native mux,
+	 * IOCFG electrical settings and the real 48 MHz CFGAXI timing source. */
 	i2c0: i2c@fcb08000 {
 		compatible = "snps,designware-i2c";
 		reg = <0xfcb08000 0x1000>;
 		interrupt-parent = <&gic>;
 		interrupts = <0 28 4>;
-		clocks = <&clock HI3620_I2CCLK0>;
+		clocks = <&i2c0_refclk>;
 		clock-frequency = <100000>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&i2c0_pins &i2c0_cfg>;
@@ -74,23 +83,19 @@
 };
 
 /* Do not replace MMC3's CIU clock with the plain gate clock here.  The base
- * S10 tree intentionally uses HI3620_MMC_CIUCLK3, whose PCTRL sample/drive/
- * divider programming is required by the K3V2 DesignWare-MSHC block. */
+ * S10 tree intentionally uses HI3620_MMC_CIUCLK3.  hi3620-hwfix2.c changes
+ * only MMC3's parent/divider and friend clock before reset; eMMC is untouched. */
 
 &pmx0 {
 	/* Important: pinctrl-single's Hi3620 gpio-ranges marks mux value 1 as
-	 * GPIO for IOMG45. The previous test accidentally selected that GPIO
-	 * function while handing the pins to the DesignWare I2C controller.
-	 * Select function 0 here so GPIO84/85 are driven by native I2C0. */
+	 * GPIO for IOMG45.  Select function 0 so GPIO84/85 are native I2C0. */
 	i2c0_pins: i2c0-pins {
 		pinctrl-single,pins = <0x0b4 0x0>;
 	};
 };
 
 &pmx1 {
-	/* Exact I2C0 IOCFG settings from the Hi3620/Hi4511 reference board.
-	 * Without this second pinctrl group I2C0 probes after a defer but the
-	 * BQ27510 traffic repeatedly loses arbitration/times out (-110/-121). */
+	/* Exact I2C0 IOCFG settings from the Hi3620/Hi4511 reference board. */
 	i2c0_cfg: i2c0-cfg {
 		pinctrl-single,pins = <
 			0x17c 0	/* I2C0_SCL (IOCFG103) */
