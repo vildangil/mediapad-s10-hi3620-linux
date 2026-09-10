@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Huawei MediaPad 10 FHD RMI4 F11 polling/trace fallback.
+ * Huawei MediaPad 10 FHD RMI4 F11 polling fallback.
  *
- * TM2263-002 enumerates correctly but does not yet report contacts. Huawei's
- * K3V2 Synaptics driver performs an F01 software reset after the board-level
- * power/reset sequence, waits for firmware to settle, and then restores the
- * RMI function configuration. Reproduce that one time after all function
- * drivers are bound, then keep the low-overhead F11 poller/trace fallback.
+ * TM2263-002 needs the Huawei-style F01 software reset after the board-level
+ * power/reset sequence, followed by the normal RMI reset/config callbacks.
+ * Keep the F11 polling fallback that makes touch reliable on this tablet, but
+ * avoid periodic/raw tracing now that the controller is known to work: pstore
+ * space is more useful for bring-up failures in other subsystems.
  *
  * This never touches F34 flash or writes F54 factory/calibration controls.
  */
@@ -19,7 +19,6 @@
 #include <linux/of.h>
 #include <linux/printk.h>
 #include <linux/rmi.h>
-#include <linux/string.h>
 #include <linux/workqueue.h>
 
 #include "rmi_bus.h"
@@ -28,7 +27,6 @@
 #define MEDIAPAD_TOUCH_POLL_MS          16
 #define MEDIAPAD_TOUCH_RETRY_MS         100
 #define MEDIAPAD_TOUCH_RAW_BYTES        16
-#define MEDIAPAD_TOUCH_STATE_EVERY      250
 #define MEDIAPAD_TOUCH_RESET_WAIT_MS    200
 
 #define RMI_F01_DEVICE_RESET            0x01
@@ -40,9 +38,6 @@ static struct rmi_device *mediapad_touch_rmi;
 static bool mediapad_touch_announced;
 static bool mediapad_touch_described;
 static bool mediapad_touch_reset_done;
-static unsigned int mediapad_touch_ticks;
-static u8 mediapad_touch_last_raw[MEDIAPAD_TOUCH_RAW_BYTES];
-static bool mediapad_touch_last_raw_valid;
 
 static int mediapad_match_physical_rmi(struct device *dev, void *data)
 {
@@ -164,8 +159,6 @@ static int mediapad_touch_vendor_reset(struct rmi_device *rmi_dev)
         if (ret < 0)
                 return ret;
 
-        /* Clear any reset/config interrupt status and let normal handlers see
-         * the post-reset state before polling begins. */
         ret = rmi_process_interrupt_requests(rmi_dev);
         if (ret < 0)
                 return ret;
@@ -190,7 +183,6 @@ static int mediapad_touch_vendor_reset(struct rmi_device *rmi_dev)
                 (int)sizeof(raw), raw);
 
         mediapad_touch_described = false;
-        mediapad_touch_last_raw_valid = false;
         return 0;
 }
 
@@ -229,32 +221,6 @@ static int mediapad_touch_describe(struct rmi_device *rmi_dev)
         return 0;
 }
 
-static int mediapad_touch_trace_f11(struct rmi_device *rmi_dev)
-{
-        struct rmi_function *f11 = mediapad_find_function(rmi_dev, 0x11);
-        u8 raw[MEDIAPAD_TOUCH_RAW_BYTES];
-        int ret;
-
-        if (!f11)
-                return -ENODEV;
-
-        ret = rmi_read_block(rmi_dev, f11->fd.data_base_addr,
-                             raw, sizeof(raw));
-        if (ret < 0)
-                return ret;
-
-        if (!mediapad_touch_last_raw_valid ||
-            memcmp(raw, mediapad_touch_last_raw, sizeof(raw))) {
-                pr_info("HI3620-TOUCH-DATA[%u]: d=%04x raw=%*phN\n",
-                        mediapad_touch_ticks, f11->fd.data_base_addr,
-                        (int)sizeof(raw), raw);
-                memcpy(mediapad_touch_last_raw, raw, sizeof(raw));
-                mediapad_touch_last_raw_valid = true;
-        }
-
-        return 0;
-}
-
 static int mediapad_poll_f11(struct rmi_device *rmi_dev)
 {
         struct rmi_driver_data *drvdata = dev_get_drvdata(&rmi_dev->dev);
@@ -287,29 +253,6 @@ static int mediapad_poll_f11(struct rmi_device *rmi_dev)
                 input_sync(drvdata->input);
 
         return 0;
-}
-
-static void mediapad_touch_log_state(struct rmi_device *rmi_dev)
-{
-        struct rmi_function *f01 = mediapad_find_function(rmi_dev, 0x01);
-        struct rmi_function *f11 = mediapad_find_function(rmi_dev, 0x11);
-        u8 ctrl[2];
-        u8 status;
-        u8 f11ctrl;
-
-        if (!f01 || !f11)
-                return;
-        if (rmi_read_block(rmi_dev, f01->fd.control_base_addr,
-                           ctrl, sizeof(ctrl)) < 0)
-                return;
-        if (rmi_read(rmi_dev, f01->fd.data_base_addr, &status) < 0)
-                return;
-        if (rmi_read(rmi_dev, f11->fd.control_base_addr, &f11ctrl) < 0)
-                return;
-
-        pr_info("HI3620-TOUCH-STATE[%u]: F01stat=%02x ctrl=%02x irqen=%02x F11ctrl=%02x f11mask=%02lx\n",
-                mediapad_touch_ticks, status, ctrl[0], ctrl[1], f11ctrl,
-                f11->irq_mask[0] & 0xff);
 }
 
 static void mediapad_touch_poll(struct work_struct *work)
@@ -351,11 +294,6 @@ static void mediapad_touch_poll(struct work_struct *work)
                                             ret);
         }
 
-        ret = mediapad_touch_trace_f11(mediapad_touch_rmi);
-        if (ret && ret != -ENODEV)
-                pr_warn_ratelimited("HI3620-TOUCH-POLL: F11 raw read failed: %d\n",
-                                    ret);
-
         ret = mediapad_poll_f11(mediapad_touch_rmi);
         if (!ret && !mediapad_touch_announced) {
                 mediapad_touch_announced = true;
@@ -364,10 +302,6 @@ static void mediapad_touch_poll(struct work_struct *work)
                 pr_warn_ratelimited("HI3620-TOUCH-POLL: F11 attention failed: %d\n",
                                     ret);
         }
-
-        if (!(mediapad_touch_ticks % MEDIAPAD_TOUCH_STATE_EVERY))
-                mediapad_touch_log_state(mediapad_touch_rmi);
-        mediapad_touch_ticks++;
 
         schedule_delayed_work(&mediapad_touch_poll_work,
                               msecs_to_jiffies(MEDIAPAD_TOUCH_POLL_MS));
