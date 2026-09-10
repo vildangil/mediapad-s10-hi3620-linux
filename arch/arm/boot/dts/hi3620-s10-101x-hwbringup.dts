@@ -72,8 +72,11 @@
 };
 
 &pmx0 {
-	/* GPIO84/GPIO85 are I2C0_SCL/I2C0_SDA on IOMG45, function 1. */
+	/* Important: pinctrl-single's Hi3620 gpio-ranges marks mux value 1 as
+	 * GPIO for IOMG45. The previous test accidentally selected that GPIO
+	 * function while handing the pins to the DesignWare I2C controller.
+	 * Select function 0 here so GPIO84/85 are driven by native I2C0. */
 	i2c0_pins: i2c0-pins {
-		pinctrl-single,pins = <0x0b4 0x1>;
+		pinctrl-single,pins = <0x0b4 0x0>;
 	};
 };
