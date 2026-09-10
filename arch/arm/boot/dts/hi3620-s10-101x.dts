@@ -137,14 +137,9 @@
 		};
 	};
 
-	/* The dedicated Hi3620 MMC CIU timing block lives in PCTRL, not SYSCTRL.
-	 * clk-hi3620.c accesses offsets 0x1f8/0x1fc from this resource for the
-	 * clock-enable/sample/drive/divider fields.  Pointing this at 0xfc802000
-	 * silently wrote unrelated SYSCTRL registers and left SD/SDIO timing in
-	 * bootloader-dependent state. */
-	mmc_clock: mmc-clock@fca09000 {
+	mmc_clock: mmc-clock@fc802000 {
 		compatible = "hisilicon,hi3620-mmc-clock";
-		reg = <0xfca09000 0x1000>;
+		reg = <0xfc802000 0x1000>;
 		#clock-cells = <1>;
 	};
 
