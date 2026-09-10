@@ -149,6 +149,9 @@ static struct hisi_gate_clock hi3620_seperated_gate_clks[] __initdata = {
 	{ HI3620_TIMER_RCLK01, "timer_rclk01", "rclk_tcxo",    CLK_SET_RATE_PARENT, 0x20, 1, 0, },
 	{ HI3620_TIMERCLK23,   "timerclk23",   "timer_rclk23", CLK_SET_RATE_PARENT, 0x20, 2, 0, },
 	{ HI3620_TIMER_RCLK23, "timer_rclk23", "rclk_tcxo",    CLK_SET_RATE_PARENT, 0x20, 3, 0, },
+	{ HI3620_TIMERCLK45,   "timerclk45",   "rclk_tcxo",    CLK_SET_RATE_PARENT, 0x40, 3, 0, },
+	{ HI3620_TIMERCLK67,   "timerclk67",   "rclk_tcxo",    CLK_SET_RATE_PARENT, 0x40, 4, 0, },
+	{ HI3620_TIMERCLK89,   "timerclk89",   "rclk_tcxo",    CLK_SET_RATE_PARENT, 0x40, 5, 0, },
 	{ HI3620_RTCCLK,       "rtcclk",       "pclk",         CLK_SET_RATE_PARENT, 0x20, 5, 0, },
 	{ HI3620_KPC_CLK,      "kpc_clk",      "pclk",         CLK_SET_RATE_PARENT, 0x20, 6, 0, },
 	{ HI3620_GPIOCLK0,     "gpioclk0",     "pclk",         CLK_SET_RATE_PARENT, 0x20, 8, 0, },
@@ -178,9 +181,6 @@ static struct hisi_gate_clock hi3620_seperated_gate_clks[] __initdata = {
 	{ HI3620_DPHY2_CLK,    "dphy2_clk",    "osc26m",       CLK_SET_RATE_PARENT, 0x30, 17, 0, },
 	{ HI3620_USBPHY_CLK,   "usbphy_clk",   "rclk_pico",    CLK_SET_RATE_PARENT, 0x30, 24, 0, },
 	{ HI3620_ACP_CLK,      "acp_clk",      "rclk_cfgaxi",  CLK_SET_RATE_PARENT, 0x30, 28, 0, },
-	{ HI3620_TIMERCLK45,   "timerclk45",   "rclk_tcxo",    CLK_SET_RATE_PARENT, 0x40, 3, 0, },
-	{ HI3620_TIMERCLK67,   "timerclk67",   "rclk_tcxo",    CLK_SET_RATE_PARENT, 0x40, 4, 0, },
-	{ HI3620_TIMERCLK89,   "timerclk89",   "rclk_tcxo",    CLK_SET_RATE_PARENT, 0x40, 5, 0, },
 	{ HI3620_PWMCLK0,      "pwmclk0",      "pwm0_mux",     CLK_SET_RATE_PARENT, 0x40, 7, 0, },
 	{ HI3620_PWMCLK1,      "pwmclk1",      "pwm1_mux",     CLK_SET_RATE_PARENT, 0x40, 8, 0, },
 	{ HI3620_UARTCLK0,     "uartclk0",     "uart0_mux",    CLK_SET_RATE_PARENT, 0x40, 16, 0, },
@@ -197,13 +197,13 @@ static struct hisi_gate_clock hi3620_seperated_gate_clks[] __initdata = {
 	{ HI3620_I2CCLK2,      "i2cclk2",      "pclk",         CLK_SET_RATE_PARENT, 0x40, 28, 0, },
 	{ HI3620_I2CCLK3,      "i2cclk3",      "pclk",         CLK_SET_RATE_PARENT, 0x40, 29, 0, },
 	{ HI3620_DDRC_PER_CLK, "ddrc_per_clk", "rclk_cfgaxi",  CLK_SET_RATE_PARENT, 0x50, 9, 0, },
-	{ HI3620_DMAC_CLK,     "dmac_clk",     "rclk_cfgaxi",  CLK_SET_RATE_PARENT, 0x50, 10, 0, },
-	{ HI3620_USB2DVC_CLK,  "usb2dvc_clk",  "rclk_cfgaxi",  CLK_SET_RATE_PARENT, 0x50, 17, 0, },
-	{ HI3620_SD_CLK,       "sd_clk",       "sd_div",       CLK_SET_RATE_PARENT, 0x50, 20, 0, },
-	{ HI3620_MMC_CLK1,     "mmc_clk1",     "mmc1_mux2",    CLK_SET_RATE_PARENT, 0x50, 21, 0, },
-	{ HI3620_MMC_CLK2,     "mmc_clk2",     "mmc2_div",     CLK_SET_RATE_PARENT, 0x50, 22, 0, },
-	{ HI3620_MMC_CLK3,     "mmc_clk3",     "mmc3_div",     CLK_SET_RATE_PARENT, 0x50, 23, 0, },
-	{ HI3620_MCU_CLK,      "mcu_clk",      "acp_clk",      CLK_SET_RATE_PARENT, 0x50, 24, 0, },
+	{ HI3620_DMAC_CLK,     "dmac_clk",      "rclk_cfgaxi",  CLK_SET_RATE_PARENT, 0x50, 10, 0, },
+	{ HI3620_USB2DVC_CLK,  "usb2dvc_clk",   "rclk_cfgaxi",  CLK_SET_RATE_PARENT, 0x50, 17, 0, },
+	{ HI3620_SD_CLK,       "sd_clk",        "sd_div",       CLK_SET_RATE_PARENT, 0x50, 20, 0, },
+	{ HI3620_MMC_CLK1,     "mmc_clk1",      "mmc1_mux2",    CLK_SET_RATE_PARENT, 0x50, 21, 0, },
+	{ HI3620_MMC_CLK2,     "mmc_clk2",      "mmc2_div",     CLK_SET_RATE_PARENT, 0x50, 22, 0, },
+	{ HI3620_MMC_CLK3,     "mmc_clk3",      "mmc3_div",     CLK_SET_RATE_PARENT, 0x50, 23, 0, },
+	{ HI3620_MCU_CLK,      "mcu_clk",       "acp_clk",      CLK_SET_RATE_PARENT, 0x50, 24, 0, },
 };
 
 static void __init hi3620_clk_init(struct device_node *np)
@@ -314,7 +314,8 @@ static int mmc_clk_determine_rate(struct clk_hw *hw,
 		req->rate = 180000000;
 		req->best_parent_rate = 1440000000;
 	}
-	return -EINVAL;
+
+	return 0;
 }
 
 static u32 mmc_clk_delay(u32 val, u32 para, u32 off, u32 len)
