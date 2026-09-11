@@ -102,10 +102,14 @@ jobs:
 
             # K3V2 forced-peripheral mode reaches USBRST/ENUMDONE at high
             # speed, but GOTGCTL.BSESVLD never asserts because that signal is
-            # supplied by Huawei's missing PMU glue.  Before SET_ADDRESS the
+            # supplied by Huawei's missing PMU glue. Before SET_ADDRESS the
             # old driver also has hsotg->connected == 0, so keeping its
-            # "connected" guard makes recovery impossible.  On this board
+            # "connected" guard makes recovery impossible. On this board
             # rearm EP0 on every USB reset regardless of both missing signals.
+            # Also preserve a valid SETUP packet count on EP0 OUT. Linux 4.9's
+            # generic request path overwrites DOEPTSIZ0 with 0x00080008; the
+            # Hi3620 DWC2 then never accepts GET_DESCRIPTOR. SUPCNT=3 yields
+            # the expected 0x60080008 SETUP receive state.
             python3 - <<'PY'
           from pathlib import Path
           p = Path('drivers/usb/dwc2/gadget.c')
@@ -139,6 +143,28 @@ jobs:
           if s.count(anchor) != 1:
               raise SystemExit('DWC2 SETUP log anchor mismatch')
           s = s.replace(anchor, extra, 1)
+
+          req_anchor = ('\tif (dir_in && index != 0)\n'
+                        '\t\tif (hs_ep->isochronous)\n'
+                        '\t\t\tepsize = DXEPTSIZ_MC(packets);\n'
+                        '\t\telse\n'
+                        '\t\t\tepsize = DXEPTSIZ_MC(1);\n'
+                        '\telse\n'
+                        '\t\tepsize = 0;\n')
+          req_fix = ('\tif (dir_in && index != 0)\n'
+                     '\t\tif (hs_ep->isochronous)\n'
+                     '\t\t\tepsize = DXEPTSIZ_MC(packets);\n'
+                     '\t\telse\n'
+                     '\t\t\tepsize = DXEPTSIZ_MC(1);\n'
+                     '\telse if (!dir_in && index == 0 &&\n'
+                     '\t\t of_machine_is_compatible("huawei,s10-101x") &&\n'
+                     '\t\t hsotg->ep0_state == DWC2_EP0_SETUP)\n'
+                     '\t\tepsize = DXEPTSIZ_MC(3);\n'
+                     '\telse\n'
+                     '\t\tepsize = 0;\n')
+          if s.count(req_anchor) != 1:
+              raise SystemExit('DWC2 EP0 request-size anchor mismatch')
+          s = s.replace(req_anchor, req_fix, 1)
           p.write_text(s)
           PY
 
@@ -203,7 +229,7 @@ jobs:
           make O=out hi3620_s10_defconfig
           make O=out olddefconfig
 
-          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER|DRM|DRM_ETNAVIV|POWER_SUPPLY|BATTERY_BQ27XXX|BATTERY_BQ27XXX_I2C|REGULATOR_TPS62360)=' out/.config || true
+          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER|DRM|DRM_ETNAVIV|POWER_SUPPLY|BATTERY_BQ27XXX|BATTERY_BQ27XXX_I2C|REGULATOR_TPS62360|BACKLIGHT_LCD_SUPPORT|BACKLIGHT_CLASS_DEVICE)=' out/.config || true
 
           grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
           grep -q '^CONFIG_ARCH_HISI=y$' out/.config
@@ -217,6 +243,8 @@ jobs:
           grep -q '^CONFIG_BATTERY_BQ27XXX=y$' out/.config
           grep -q '^CONFIG_BATTERY_BQ27XXX_I2C=y$' out/.config
           grep -q '^CONFIG_REGULATOR_TPS62360=y$' out/.config
+          grep -q '^CONFIG_BACKLIGHT_LCD_SUPPORT=y$' out/.config
+          grep -q '^CONFIG_BACKLIGHT_CLASS_DEVICE=y$' out/.config
 
       - name: Build zImage and MediaPad DTB
         run: |
