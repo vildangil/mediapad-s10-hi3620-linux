@@ -15,11 +15,9 @@ jobs:
       - name: Download and extract ARMv7 SVG loader
         run: |
           set -euxo pipefail
-          # Alpine 3.23's librsvg no longer ships the GdkPixbuf SVG loader.
-          # 3.22 is the last stable branch that does, and the loader links to
-          # librsvg-2.so.2 so it can use the newer SONAME-compatible library
-          # already present in the rootfs.
-          url='https://dl-cdn.alpinelinux.org/alpine/v3.22/community/armv7/librsvg-2.60.0-r0.apk'
+          # Alpine 3.21+ no longer carries the classic GdkPixbuf SVG plugin.
+          # v3.20 librsvg still ships it and it links through librsvg-2.so.2.
+          url='https://dl-cdn.alpinelinux.org/alpine/v3.20/community/armv7/librsvg-2.58.5-r0.apk'
           curl -fL --retry 4 "$url" -o librsvg.apk
           mkdir extracted payload
           tar -xzf librsvg.apk -C extracted
@@ -34,7 +32,7 @@ jobs:
       - name: Upload SVG loader
         uses: actions/upload-artifact@v4
         with:
-          name: alpine-v3.22-armv7-libpixbufloader-svg
+          name: alpine-v3.20-armv7-libpixbufloader-svg
           path: payload/
           if-no-files-found: error
           retention-days: 7
