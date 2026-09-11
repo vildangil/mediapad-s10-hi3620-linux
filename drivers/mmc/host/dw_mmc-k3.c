@@ -41,61 +41,42 @@ static unsigned long dw_mci_hi6220_caps[] = {
 };
 
 /*
- * Huawei's K3V2 vendor MSHCI driver does not assert CTRL_RESET,
- * FIFO_RESET and DMA_RESET together.  It resets the three blocks in that
- * order and waits for each bit to self-clear before moving on.  The generic
- * DesignWare probe resets all three at once; on a cold MediaPad controller
- * (notably SDIO1/MMC3 at fcd06000) FIFO_RESET then remains set forever.
- *
- * Run the vendor sequence once after the K3 clocks are live and before the
- * generic probe performs its normal reset.  Keep the workaround strictly
- * board-scoped while bring-up is in progress.
+ * The Huawei K3V2 vendor dw_mmc driver resets CTRL/FIFO/DMA together and
+ * waits up to 500 ms for all three bits to self-clear.  An earlier MediaPad
+ * bring-up experiment reset the blocks sequentially; on the SD and MMC3/SDIO
+ * instances that left FIFO_RESET (CTRL bit 1) stuck forever.  Match the
+ * vendor sequence exactly, board-scoped, and leave the working eMMC clock
+ * setup untouched.
  */
-static int dw_mci_k3_reset_one(struct dw_mci *host, u32 reset,
-				const char *name)
-{
-	unsigned int timeout = 100;
-	u32 ctrl;
-
-	ctrl = mci_readl(host, CTRL);
-	mci_writel(host, CTRL, ctrl | reset);
-
-	while (mci_readl(host, CTRL) & reset) {
-		if (!--timeout) {
-			dev_err(host->dev,
-				"MediaPad sequential %s reset timed out (CTRL=%08x)\n",
-				name, mci_readl(host, CTRL));
-			return -ETIMEDOUT;
-		}
-		mdelay(1);
-	}
-
-	return 0;
-}
-
 static int dw_mci_k3_init(struct dw_mci *host)
 {
-	int ret;
+	unsigned long timeout;
+	u32 mask = SDMMC_CTRL_RESET | SDMMC_CTRL_FIFO_RESET |
+		   SDMMC_CTRL_DMA_RESET;
+	u32 ctrl;
 
 	if (!of_machine_is_compatible("huawei,s10-101x"))
 		return 0;
 
-	dev_info(host->dev, "MediaPad K3V2 sequential controller reset\n");
+	dev_info(host->dev, "MediaPad K3V2 Huawei combined controller reset\n");
+	mci_writel(host, CTRL, mask);
+	timeout = jiffies + msecs_to_jiffies(500);
 
-	ret = dw_mci_k3_reset_one(host, SDMMC_CTRL_RESET, "controller");
-	if (ret)
-		return ret;
+	do {
+		ctrl = mci_readl(host, CTRL);
+		if (!(ctrl & mask)) {
+			dev_info(host->dev,
+				 "MediaPad K3V2 combined controller reset complete (CTRL=%08x)\n",
+				 ctrl);
+			return 0;
+		}
+		cpu_relax();
+	} while (time_before(jiffies, timeout));
 
-	ret = dw_mci_k3_reset_one(host, SDMMC_CTRL_FIFO_RESET, "FIFO");
-	if (ret)
-		return ret;
-
-	ret = dw_mci_k3_reset_one(host, SDMMC_CTRL_DMA_RESET, "DMA");
-	if (ret)
-		return ret;
-
-	dev_info(host->dev, "MediaPad K3V2 sequential controller reset complete\n");
-	return 0;
+	dev_err(host->dev,
+		"MediaPad Huawei combined reset timed out (CTRL=%08x)\n",
+		mci_readl(host, CTRL));
+	return -ETIMEDOUT;
 }
 
 static void dw_mci_k3_set_ios(struct dw_mci *host, struct mmc_ios *ios)
