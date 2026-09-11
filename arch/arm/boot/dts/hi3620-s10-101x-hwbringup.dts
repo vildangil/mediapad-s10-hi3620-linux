@@ -49,9 +49,9 @@
 		};
 	};
 
-	/* BQ27510 fuel gauge on K3V2 I2C0.  50 kHz gives the old DesignWare
-	 * controller extra margin; the physical CFGAXI source is now actually
-	 * programmed to the 48 MHz value described by this clock.
+	/* BQ27510 fuel gauge on K3V2 I2C0. The Linux 4.9 DesignWare driver only
+	 * accepts the standard 100 kHz/400 kHz/1 MHz/3.4 MHz bus rates, so keep
+	 * this at 100 kHz while using the corrected 48 MHz CFGAXI input clock.
 	 */
 	i2c0: i2c@fcb08000 {
 		compatible = "snps,designware-i2c";
@@ -59,7 +59,7 @@
 		interrupt-parent = <&gic>;
 		interrupts = <0 28 4>;
 		clocks = <&i2c0_refclk>;
-		clock-frequency = <50000>;
+		clock-frequency = <100000>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&i2c0_pins &i2c0_cfg>;
 		#address-cells = <1>;
