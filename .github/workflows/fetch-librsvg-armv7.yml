@@ -1,4 +1,4 @@
-name: Fetch Alpine v3.23 ARMv7 librsvg
+name: Fetch legacy ARMv7 SVG loader
 
 on:
   workflow_dispatch:
@@ -12,25 +12,29 @@ jobs:
   fetch:
     runs-on: ubuntu-24.04
     steps:
-      - name: Download and extract ARMv7 librsvg
+      - name: Download and extract ARMv7 SVG loader
         run: |
           set -euxo pipefail
-          url='https://dl-cdn.alpinelinux.org/alpine/v3.23/community/armv7/librsvg-2.61.2-r0.apk'
+          # Alpine 3.23's librsvg no longer ships the GdkPixbuf SVG loader.
+          # 3.22 is the last stable branch that does, and the loader links to
+          # librsvg-2.so.2 so it can use the newer SONAME-compatible library
+          # already present in the rootfs.
+          url='https://dl-cdn.alpinelinux.org/alpine/v3.22/community/armv7/librsvg-2.60.0-r0.apk'
           curl -fL --retry 4 "$url" -o librsvg.apk
-          mkdir extracted
+          mkdir extracted payload
           tar -xzf librsvg.apk -C extracted
-          test -f extracted/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-svg.so
-          file extracted/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-svg.so
-          find extracted/usr/lib -maxdepth 5 -type f -o -type l | sort
-          mkdir payload
-          cp -a extracted/usr payload/
-          cp librsvg.apk payload/
-          sha256sum payload/librsvg.apk > payload/SHA256SUMS
+          loader='extracted/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-svg.so'
+          test -f "$loader"
+          file "$loader"
+          readelf -d "$loader" | tee payload/readelf-dynamic.txt
+          mkdir -p payload/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders
+          cp -a "$loader" payload/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/
+          sha256sum "$loader" > payload/SHA256SUMS
 
-      - name: Upload librsvg payload
+      - name: Upload SVG loader
         uses: actions/upload-artifact@v4
         with:
-          name: alpine-v3.23-armv7-librsvg-2.61.2-r0
+          name: alpine-v3.22-armv7-libpixbufloader-svg
           path: payload/
           if-no-files-found: error
           retention-days: 7
