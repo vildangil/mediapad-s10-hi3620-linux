@@ -31,15 +31,9 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_BLK_DEV_RAM=y
 CONFIG_BLK_DEV_RAM_SIZE=65536
 
-# elogind on postmarketOS uses a named cgroup-v1 hierarchy. Without cgroups
-# login1 activation waits 25 seconds and XFCE/pipewire session setup breaks.
 CONFIG_CGROUPS=y
 CONFIG_CGROUP_FREEZER=y
 CONFIG_CGROUP_DEVICE=y
-
-# Modern GTK/glycin uses bubblewrap for image-loader sandboxing. The XFCE
-# rootfs invokes bwrap with --unshare-all and --seccomp; without user
-# namespaces/seccomp the loader exits before GTK can render application icons.
 CONFIG_NAMESPACES=y
 CONFIG_USER_NS=y
 CONFIG_SECCOMP=y
@@ -108,6 +102,8 @@ CONFIG_PWRSEQ_SIMPLE=y
 CONFIG_POWER_SUPPLY=y
 CONFIG_BATTERY_BQ27XXX=y
 CONFIG_BATTERY_BQ27XXX_I2C=y
+CONFIG_REGULATOR=y
+CONFIG_REGULATOR_TPS62360=y
 
 CONFIG_USB_GADGET=y
 CONFIG_USB_DWC2=y
@@ -115,9 +111,6 @@ CONFIG_USB_DWC2_PERIPHERAL=y
 CONFIG_USB_CONFIGFS=y
 CONFIG_USB_CONFIGFS_RNDIS=y
 
-# Prepare userspace/audio core for the Hi3620 ASP + Hi6421 codec port.
-# The board-specific playback driver will be enabled after its Android-era
-# vendor dependencies are reduced to a safe mainline-compatible subset.
 CONFIG_SOUND=y
 CONFIG_SND=y
 CONFIG_SND_PCM=y
