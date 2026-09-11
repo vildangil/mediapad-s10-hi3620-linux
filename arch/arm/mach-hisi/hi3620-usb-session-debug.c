@@ -17,6 +17,7 @@
 #define PCTRL_PERI_CTRL16              0x040
 #define PCTRL_PERI_CTRL17              0x044
 #define PCTRL_PERI_CTRL21              0x1f4
+#define PCTRL16_VBUS_MASK              (BIT(10) | BIT(11))
 
 #define USB_GOTGCTL                    0x000
 #define USB_GAHBCFG                    0x008
@@ -38,6 +39,9 @@
 #define USB_DOEPTSIZ0                  0xb10
 
 #define GOTGCTL_BSESVLD                BIT(19)
+#define DCTL_SFTDISCON                 BIT(1)
+#define DWC2_GSNPSID_MASK              0xfffff000
+#define DWC2_GSNPSID_VALUE             0x4f542000
 
 #define HI3620_USB_FIRST_DELAY         (2 * HZ)
 #define HI3620_USB_RETRY_DELAY         (3 * HZ)
@@ -52,6 +56,9 @@ static void hi3620_usb_state_once(struct work_struct *work)
         void __iomem *pctrl;
         void __iomem *usb;
         u32 gotgctl;
+        u32 gsnpsid;
+        u32 pctrl16;
+        u32 dctl;
 
         if (!of_machine_is_compatible("huawei,s10-101x"))
                 return;
@@ -67,13 +74,48 @@ static void hi3620_usb_state_once(struct work_struct *work)
         }
 
         hi3620_usb_state_attempts++;
+        gsnpsid = readl(usb + USB_GSNPSID);
+        gotgctl = readl(usb + USB_GOTGCTL);
+        pctrl16 = readl(pctrl + PCTRL_PERI_CTRL16);
+        dctl = readl(usb + USB_DCTL);
+
+        /*
+         * The S10's PMU/PHY glue never propagates B-session-valid into the
+         * Synopsys GOTGCTL bit when Linux runs the core in forced peripheral
+         * mode.  An earlier bring-up test proved that forcing Huawei's
+         * PERI_CTRL16 VBUS selector (bits 11:10) makes a real PC start
+         * high-speed USB reset/enumeration, but that test then got stuck
+         * because Linux 4.9 only rearmed EP0 when BSESVLD and SET_ADDRESS had
+         * already happened.
+         *
+         * The DWC2 IRQ path now has a MediaPad-only EP0 rearm that works even
+         * before SET_ADDRESS.  Retry the *hardware* session nudge together
+         * with that corrected EP0 path.  Wait until GSNPSID is sane so the
+         * early diagnostic pass cannot touch an uninitialised controller.
+         */
+        if (!(gotgctl & GOTGCTL_BSESVLD) &&
+            (gsnpsid & DWC2_GSNPSID_MASK) == DWC2_GSNPSID_VALUE) {
+                if ((pctrl16 & PCTRL16_VBUS_MASK) != PCTRL16_VBUS_MASK) {
+                        writel(pctrl16 | PCTRL16_VBUS_MASK,
+                               pctrl + PCTRL_PERI_CTRL16);
+                        mb();
+                        pctrl16 = readl(pctrl + PCTRL_PERI_CTRL16);
+                }
+
+                if (dctl & DCTL_SFTDISCON) {
+                        writel(dctl & ~DCTL_SFTDISCON, usb + USB_DCTL);
+                        mb();
+                        dctl = readl(usb + USB_DCTL);
+                }
+
+                pr_info("HI3620-USB-FORCE: attempt=%u p16=%08x dctl=%08x bsesvld=%u\n",
+                        hi3620_usb_state_attempts, pctrl16, dctl,
+                        !!(gotgctl & GOTGCTL_BSESVLD));
+        }
+
+        /* Re-read after the board-specific nudge for the state snapshot. */
         gotgctl = readl(usb + USB_GOTGCTL);
 
-        /* High-speed ENUMDONE is already observed on real host resets.  Do
-         * not force VBUS selectors or toggle DCTL here; Linux 4.9's EP0 reset
-         * path is fixed separately to tolerate the missing Huawei BSESVLD
-         * PMU glue in forced-peripheral mode.
-         */
         pr_info("HI3620-USB-STATE: attempt=%u bsesvld=%u gsnpsid=%08x gotgctl=%08x gahbcfg=%08x gusbcfg=%08x gintsts=%08x gintmsk=%08x dcfg=%08x dctl=%08x dsts=%08x diepmsk=%08x doepmsk=%08x daint=%08x daintmsk=%08x diepctl0=%08x diepint0=%08x doepctl0=%08x doepint0=%08x doeptsiz0=%08x p16=%08x p17=%08x p21=%08x\n",
                 hi3620_usb_state_attempts,
                 !!(gotgctl & GOTGCTL_BSESVLD),
