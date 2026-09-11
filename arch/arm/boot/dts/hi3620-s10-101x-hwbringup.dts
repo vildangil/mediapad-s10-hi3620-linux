@@ -27,6 +27,17 @@
 		cores = <&gpu>;
 	};
 
+	/* First real audio bring-up: playback-only Hi3620 ASP + HI6421 speaker.
+	 * The board-local driver owns the ASP internal DMA and PMUSPI codec setup.
+	 */
+	audio: audio@fa100000 {
+		compatible = "huawei,s10-101x-audio";
+		reg = <0xfa100000 0x00004000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 45 4>;
+		status = "okay";
+	};
+
 	/* Huawei's K3V2 GPIO-key driver documents volume-up on GPIO137
 	 * (GPIO17_1) and volume-down on GPIO138 (GPIO17_2), both active-low. */
 	gpio-keys {
