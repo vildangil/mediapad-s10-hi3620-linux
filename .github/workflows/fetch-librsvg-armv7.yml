@@ -1,0 +1,36 @@
+name: Fetch Alpine v3.23 ARMv7 librsvg
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pmos-hwbringup-20260909
+    paths:
+      - '.github/workflows/fetch-librsvg-armv7.yml'
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download and extract ARMv7 librsvg
+        run: |
+          set -euxo pipefail
+          url='https://dl-cdn.alpinelinux.org/alpine/v3.23/community/armv7/librsvg-2.61.2-r0.apk'
+          curl -fL --retry 4 "$url" -o librsvg.apk
+          mkdir extracted
+          tar -xzf librsvg.apk -C extracted
+          test -f extracted/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-svg.so
+          file extracted/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-svg.so
+          find extracted/usr/lib -maxdepth 5 -type f -o -type l | sort
+          mkdir payload
+          cp -a extracted/usr payload/
+          cp librsvg.apk payload/
+          sha256sum payload/librsvg.apk > payload/SHA256SUMS
+
+      - name: Upload librsvg payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpine-v3.23-armv7-librsvg-2.61.2-r0
+          path: payload/
+          if-no-files-found: error
+          retention-days: 7
