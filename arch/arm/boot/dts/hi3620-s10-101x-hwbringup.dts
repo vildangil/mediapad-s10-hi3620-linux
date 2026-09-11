@@ -6,25 +6,20 @@
 #include <dt-bindings/input/input.h>
 
 / {
-	/*
-	 * Huawei's CS clock tree sources I2C0 from CFGAXI at 48 MHz.  The old
-	 * mainline Hi3620 clock description incorrectly reports pclk/26 MHz for
-	 * this gate, causing DesignWare to program the wrong SCL high/low counts.
-	 * hi3620-hwfix2.c keeps the real SCTRL gate/reset under board control;
-	 * this fixed clock only supplies the correct input rate to the I2C core.
-	 */
+	/* Huawei CS silicon runs the peripheral CFGAXI domain at 48 MHz. */
 	i2c0_refclk: i2c0-refclk {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <48000000>;
 	};
 
-	/* Vivante GC4000 integrated in Hi3620/K3V2.  The first-stage helper
-	 * supplies the vendor external power/clock/reset sequence.  The second
-	 * stage now performs Huawei galcore's missing pre-identify write of 0x900
-	 * to HI_CLOCK_CONTROL before Etnaviv probes, so this test can safely ask
-	 * the real core for its identity rather than accepting the power-on GC0.
-	 */
+	i2c3_refclk: i2c3-refclk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <48000000>;
+	};
+
+	/* Vivante GC4000 integrated in Hi3620/K3V2. */
 	gpu: gpu@fa000000 {
 		compatible = "vivante,gc";
 		reg = <0xfa000000 0x00040000>;
@@ -60,15 +55,17 @@
 		};
 	};
 
-	/* BQ27510 fuel gauge on K3V2 I2C0.  The controller needs the native mux,
-	 * IOCFG electrical settings and the real 48 MHz CFGAXI timing source. */
+	/* BQ27510 fuel gauge on K3V2 I2C0.  50 kHz gives the old DesignWare
+	 * controller extra margin; the physical CFGAXI source is now actually
+	 * programmed to the 48 MHz value described by this clock.
+	 */
 	i2c0: i2c@fcb08000 {
 		compatible = "snps,designware-i2c";
 		reg = <0xfcb08000 0x1000>;
 		interrupt-parent = <&gic>;
 		interrupts = <0 28 4>;
 		clocks = <&i2c0_refclk>;
-		clock-frequency = <100000>;
+		clock-frequency = <50000>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&i2c0_pins &i2c0_cfg>;
 		#address-cells = <1>;
@@ -80,6 +77,43 @@
 			reg = <0x55>;
 		};
 	};
+
+	/* Huawei S10 vendor kernel enables CONFIG_EXTRAL_DYNAMIC_DCDC and places
+	 * a TPS6236x GPU supply at I2C3 address 0x60.  The enable pin is GPIO19
+	 * (GPIO2_3).  Keep voltage programming out of this first test: turn on
+	 * the physical rail and let the generic TPS driver identify/register it
+	 * while preserving the chip's existing VSET value.
+	 */
+	i2c3: i2c@fcb0d000 {
+		compatible = "snps,designware-i2c";
+		reg = <0xfcb0d000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 63 4>;
+		clocks = <&i2c3_refclk>;
+		clock-frequency = <50000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c3_pins &i2c3_cfg>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		gpu_dcdc: regulator@60 {
+			compatible = "ti,tps62360";
+			reg = <0x60>;
+			regulator-name = "vcc_gpu_external";
+			ti,vsel0-state-high;
+		};
+	};
+};
+
+/* GPIO19 is the external TPS6236x enable used by Huawei's S10 board file. */
+&gpio2 {
+	gpu-dcdc-enable {
+		gpio-hog;
+		gpios = <3 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "gpu-dcdc-enable";
+	};
 };
 
 /* Do not replace MMC3's CIU clock with the plain gate clock here.  The base
@@ -87,10 +121,17 @@
  * only MMC3's parent/divider and friend clock before reset; eMMC is untouched. */
 
 &pmx0 {
-	/* Important: pinctrl-single's Hi3620 gpio-ranges marks mux value 1 as
-	 * GPIO for IOMG45.  Select function 0 so GPIO84/85 are native I2C0. */
+	/* GPIO84/85 native I2C0. */
 	i2c0_pins: i2c0-pins {
 		pinctrl-single,pins = <0x0b4 0x0>;
+	};
+
+	/* Vendor CS iomux: GPIO57/58 use IOMG20/21 function 2 for I2C3. */
+	i2c3_pins: i2c3-pins {
+		pinctrl-single,pins = <
+			0x050 0x2
+			0x054 0x2
+		>;
 	};
 };
 
@@ -104,5 +145,15 @@
 		pinctrl-single,bias-pulldown = <0 2 0 2>;
 		pinctrl-single,bias-pullup = <0 1 0 1>;
 		pinctrl-single,drive-strength = <0x30 0xf0>;
+	};
+
+	/* IOCG73/74 are GPIO57/58. Huawei's I2C3 normal state uses NOPULL. */
+	i2c3_cfg: i2c3-cfg {
+		pinctrl-single,pins = <
+			0x100 0
+			0x104 0
+		>;
+		pinctrl-single,bias-pulldown = <0 2 0 2>;
+		pinctrl-single,bias-pullup = <0 1 0 1>;
 	};
 };
