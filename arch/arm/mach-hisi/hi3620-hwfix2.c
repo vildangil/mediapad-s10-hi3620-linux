@@ -15,6 +15,7 @@
 #include <linux/printk.h>
 
 #define HI3620_SCTRL_PHYS              0xfc802000
+#define HI3620_PCTRL_PHYS              0xfca09000
 #define HI3620_G3D_PHYS                0xfa000000
 #define HI3620_MAP_SIZE                0x1000
 
@@ -37,6 +38,14 @@
 #define SCTRL_DIV_REG0                 0x100
 #define SCTRL_DIV_REG2                 0x108
 #define SCTRL_DIV_REG14                0x140
+
+/* PCTRL0 uses the same high-word write-mask convention as the other K3V2
+ * peripheral control registers. Huawei's board code enables a 300 ns SDA
+ * delay for I2C0 with the exact value 0x00010001 before using the BQ27510.
+ * This only touches bit 0 and leaves the USB/PCTRL fields intact.
+ */
+#define PCTRL_PERI_CTRL0               0x000
+#define I2C0_ENABLE_DELAY_SDA          0x00010001
 
 /* Huawei CS clock tree: select PLL2 for CFGAXI, then divide 1440 MHz by
  * 15 * 2 = 30 => 48 MHz.  These are the exact high-word-mask writes used by
@@ -106,6 +115,20 @@ static void hi3620_hwfix2_cfgaxi(void __iomem *sctrl)
 
         pr_info("HI3620-HWFIX2-CFGAXI: div0=%08x->%08x expected_low=0000802e\n",
                 before, after);
+}
+
+static void hi3620_hwfix2_i2c0_delay(void __iomem *pctrl)
+{
+        u32 before = readl(pctrl + PCTRL_PERI_CTRL0);
+        u32 after;
+
+        writel(I2C0_ENABLE_DELAY_SDA, pctrl + PCTRL_PERI_CTRL0);
+        mb();
+        udelay(2);
+        after = readl(pctrl + PCTRL_PERI_CTRL0);
+
+        pr_info("HI3620-HWFIX2-I2C-SDA: pctrl0=%08x->%08x delay_bit=%u\n",
+                before, after, !!(after & BIT(0)));
 }
 
 static void hi3620_hwfix2_i2c0(void __iomem *sctrl)
@@ -247,17 +270,21 @@ static void hi3620_hwfix2_gpu(void __iomem *sctrl, void __iomem *g3d)
 static int __init hi3620_mediapad_hwfix2(void)
 {
         void __iomem *sctrl;
+        void __iomem *pctrl;
         void __iomem *g3d;
 
         if (!of_machine_is_compatible("huawei,s10-101x"))
                 return 0;
 
         sctrl = ioremap(HI3620_SCTRL_PHYS, HI3620_MAP_SIZE);
+        pctrl = ioremap(HI3620_PCTRL_PHYS, HI3620_MAP_SIZE);
         g3d = ioremap(HI3620_G3D_PHYS, HI3620_MAP_SIZE);
         if (!sctrl || !g3d) {
                 pr_err("HI3620-HWFIX2: failed to map SCTRL/G3D\n");
                 if (g3d)
                         iounmap(g3d);
+                if (pctrl)
+                        iounmap(pctrl);
                 if (sctrl)
                         iounmap(sctrl);
                 return 0;
@@ -265,6 +292,10 @@ static int __init hi3620_mediapad_hwfix2(void)
 
         pr_info("HI3620-HWFIX2: second-stage bring-up start\n");
         hi3620_hwfix2_cfgaxi(sctrl);
+        if (pctrl)
+                hi3620_hwfix2_i2c0_delay(pctrl);
+        else
+                pr_warn("HI3620-HWFIX2-I2C-SDA: failed to map PCTRL\n");
         hi3620_hwfix2_i2c0(sctrl);
         hi3620_hwfix2_sd(sctrl);
         hi3620_hwfix2_mmc3(sctrl);
@@ -272,6 +303,8 @@ static int __init hi3620_mediapad_hwfix2(void)
         pr_info("HI3620-HWFIX2: second-stage bring-up done\n");
 
         iounmap(g3d);
+        if (pctrl)
+                iounmap(pctrl);
         iounmap(sctrl);
         return 0;
 }
