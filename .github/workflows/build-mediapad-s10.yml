@@ -102,23 +102,23 @@ jobs:
 
             # K3V2 forced-peripheral mode reaches USBRST/ENUMDONE at high
             # speed, but GOTGCTL.BSESVLD never asserts because that signal is
-            # supplied by Huawei's missing PMU glue. Linux 4.9 disconnects the
-            # gadget on every USBRST and only rearms EP0 when BSESVLD is set,
-            # causing an endless host reset loop. Rearm EP0 on this board even
-            # with BSESVLD=0, and log control SETUP traffic to ramoops.
+            # supplied by Huawei's missing PMU glue.  Before SET_ADDRESS the
+            # old driver also has hsotg->connected == 0, so keeping its
+            # "connected" guard makes recovery impossible.  On this board
+            # rearm EP0 on every USB reset regardless of both missing signals.
             python3 - <<'PY'
           from pathlib import Path
           p = Path('drivers/usb/dwc2/gadget.c')
           s = p.read_text()
           old = ('\t\tif (usb_status & GOTGCTL_BSESVLD && connected)\n'
                  '\t\t\tdwc2_hsotg_core_init_disconnected(hsotg, true);\n')
-          new = ('\t\tif (((usb_status & GOTGCTL_BSESVLD) ||\n'
-                 '\t\t     of_machine_is_compatible("huawei,s10-101x")) &&\n'
-                 '\t\t    connected) {\n'
+          new = ('\t\tif ((usb_status & GOTGCTL_BSESVLD && connected) ||\n'
+                 '\t\t    of_machine_is_compatible("huawei,s10-101x")) {\n'
                  '\t\t\tif (!(usb_status & GOTGCTL_BSESVLD) &&\n'
                  '\t\t\t    of_machine_is_compatible("huawei,s10-101x"))\n'
                  '\t\t\t\tdev_info_ratelimited(hsotg->dev,\n'
-                 '\t\t\t\t\t"HI3620-USB-EP0: USBRST rearm with BSESVLD=0\\n");\n'
+                 '\t\t\t\t\t"HI3620-USB-EP0: USBRST unconditional board rearm BSESVLD=0 connected=%u\\n",\n'
+                 '\t\t\t\t\tconnected);\n'
                  '\t\t\tdwc2_hsotg_core_init_disconnected(hsotg, true);\n'
                  '\t\t}\n')
           if s.count(old) != 1:
@@ -142,9 +142,9 @@ jobs:
           p.write_text(s)
           PY
 
-            # Log the real TPS6236x chip ID. The S10 vendor tree uses an
-            # external GPU DCDC at I2C3/0x60; DT initially declares the common
-            # TPS62360 register layout without changing its VSET voltage.
+            # Keep the TPS probe instrumentation available for later isolated
+            # GPU-DCDC tests. There is currently no TPS node in the safe DT,
+            # so this code is dormant in normal MediaPad boots.
             python3 - <<'PY'
           from pathlib import Path
           p = Path('drivers/regulator/tps62360-regulator.c')
@@ -153,7 +153,6 @@ jobs:
                     '\tif (IS_ERR(tps->regmap)) {\n')
           if s.count(anchor) != 1:
               raise SystemExit('TPS62360 regmap anchor mismatch')
-          # Add the read after the existing IS_ERR block instead of inside it.
           end_anchor = ('\t\treturn ret;\n'
                         '\t}\n'
                         '\ti2c_set_clientdata(client, tps);\n')
