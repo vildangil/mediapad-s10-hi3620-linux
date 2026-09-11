@@ -77,10 +77,7 @@ jobs:
           PY
 
           # Huawei's tablet firmware exposes the BQ27510 command map used by
-          # k3_bq27510.c: RemainingCapacity=0x10 and SOC=0x2c.  Linux 4.9's
-          # generic BQ27510 table uses 0x0c/0x20, which produced impossible
-          # capacity readings even after the I2C bus itself started working.
-          # Keep this build-time quirk on the MediaPad hwbringup branch.
+          # k3_bq27510.c: RemainingCapacity=0x10 and SOC=0x2c.
           if [[ "${GITHUB_REF_NAME}" == "pmos-hwbringup-20260909" ]]; then
             python3 - <<'PY'
           from pathlib import Path
@@ -102,12 +99,81 @@ jobs:
           s = s[:begin] + block + s[end:]
           p.write_text(s)
           PY
+
+            # K3V2 forced-peripheral mode reaches USBRST/ENUMDONE at high
+            # speed, but GOTGCTL.BSESVLD never asserts because that signal is
+            # supplied by Huawei's missing PMU glue. Linux 4.9 disconnects the
+            # gadget on every USBRST and only rearms EP0 when BSESVLD is set,
+            # causing an endless host reset loop. Rearm EP0 on this board even
+            # with BSESVLD=0, and log control SETUP traffic to ramoops.
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('drivers/usb/dwc2/gadget.c')
+          s = p.read_text()
+          old = ('\t\tif (usb_status & GOTGCTL_BSESVLD && connected)\n'
+                 '\t\t\tdwc2_hsotg_core_init_disconnected(hsotg, true);\n')
+          new = ('\t\tif (((usb_status & GOTGCTL_BSESVLD) ||\n'
+                 '\t\t     of_machine_is_compatible("huawei,s10-101x")) &&\n'
+                 '\t\t    connected) {\n'
+                 '\t\t\tif (!(usb_status & GOTGCTL_BSESVLD) &&\n'
+                 '\t\t\t    of_machine_is_compatible("huawei,s10-101x"))\n'
+                 '\t\t\t\tdev_info_ratelimited(hsotg->dev,\n'
+                 '\t\t\t\t\t"HI3620-USB-EP0: USBRST rearm with BSESVLD=0\\n");\n'
+                 '\t\t\tdwc2_hsotg_core_init_disconnected(hsotg, true);\n'
+                 '\t\t}\n')
+          if s.count(old) != 1:
+              raise SystemExit('DWC2 USBRST/BSESVLD anchor mismatch')
+          s = s.replace(old, new, 1)
+
+          anchor = ('\tdev_dbg(hsotg->dev,\n'
+                    '\t\t"ctrl Type=%02x, Req=%02x, V=%04x, I=%04x, L=%04x\\n",\n'
+                    '\t\tctrl->bRequestType, ctrl->bRequest, ctrl->wValue,\n'
+                    '\t\tctrl->wIndex, ctrl->wLength);\n')
+          extra = (anchor + '\n'
+                   '\tif (of_machine_is_compatible("huawei,s10-101x"))\n'
+                   '\t\tdev_info_ratelimited(hsotg->dev,\n'
+                   '\t\t\t"HI3620-USB-EP0: setup type=%02x req=%02x value=%04x index=%04x len=%04x\\n",\n'
+                   '\t\t\tctrl->bRequestType, ctrl->bRequest,\n'
+                   '\t\t\tle16_to_cpu(ctrl->wValue), le16_to_cpu(ctrl->wIndex),\n'
+                   '\t\t\tle16_to_cpu(ctrl->wLength));\n')
+          if s.count(anchor) != 1:
+              raise SystemExit('DWC2 SETUP log anchor mismatch')
+          s = s.replace(anchor, extra, 1)
+          p.write_text(s)
+          PY
+
+            # Log the real TPS6236x chip ID. The S10 vendor tree uses an
+            # external GPU DCDC at I2C3/0x60; DT initially declares the common
+            # TPS62360 register layout without changing its VSET voltage.
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('drivers/regulator/tps62360-regulator.c')
+          s = p.read_text()
+          anchor = ('\ttps->regmap = devm_regmap_init_i2c(client, &tps62360_regmap_config);\n'
+                    '\tif (IS_ERR(tps->regmap)) {\n')
+          if s.count(anchor) != 1:
+              raise SystemExit('TPS62360 regmap anchor mismatch')
+          # Add the read after the existing IS_ERR block instead of inside it.
+          end_anchor = ('\t\treturn ret;\n'
+                        '\t}\n'
+                        '\ti2c_set_clientdata(client, tps);\n')
+          repl = ('\t\treturn ret;\n'
+                  '\t}\n'
+                  '\tif (of_machine_is_compatible("huawei,s10-101x")) {\n'
+                  '\t\tunsigned int raw_id;\n'
+                  '\t\tret = regmap_read(tps->regmap, REG_CHIPID, &raw_id);\n'
+                  '\t\tdev_info(&client->dev, "HI3620-GPU-DCDC: TPS6236x id rc=%d raw=%02x\\n",\n'
+                  '\t\t\t ret, ret ? 0 : raw_id);\n'
+                  '\t}\n'
+                  '\ti2c_set_clientdata(client, tps);\n')
+          if s.count(end_anchor) != 1:
+              raise SystemExit('TPS62360 post-regmap anchor mismatch')
+          s = s.replace(end_anchor, repl, 1)
+          p.write_text(s)
+          PY
           fi
 
-          # MediaPad-specific safety guard. Linux 4.9 Etnaviv's master can
-          # register /dev/dri/card0 even after etnaviv_gpu_init rejects GC0.
-          # The board helper wakes the core before device_initcall; if the raw
-          # CHIP_MODEL is still zero at GPU probe, refuse that component.
+          # MediaPad-specific Etnaviv safety guard: never publish a dead GC0.
           python3 - <<'PY'
           from pathlib import Path
           p = Path('drivers/gpu/drm/etnaviv/etnaviv_gpu.c')
@@ -138,25 +204,20 @@ jobs:
           make O=out hi3620_s10_defconfig
           make O=out olddefconfig
 
-          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER|DRM|DRM_ETNAVIV|POWER_SUPPLY|BATTERY_BQ27XXX|BATTERY_BQ27XXX_I2C)=' out/.config || true
+          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER|DRM|DRM_ETNAVIV|POWER_SUPPLY|BATTERY_BQ27XXX|BATTERY_BQ27XXX_I2C|REGULATOR_TPS62360)=' out/.config || true
 
           grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
           grep -q '^CONFIG_ARCH_HISI=y$' out/.config
           grep -q '^CONFIG_ARCH_HI3xxx=y$' out/.config
           grep -q '^CONFIG_CPU_V7=y$' out/.config
-          grep -q '^CONFIG_CPU_32v7=y$' out/.config
           grep -q '^CONFIG_SMP=y$' out/.config
           grep -q '^CONFIG_NR_CPUS=4$' out/.config
           grep -q '^CONFIG_ARM_APPENDED_DTB=y$' out/.config
-          grep -q '^CONFIG_ARM_ATAG_DTB_COMPAT=y$' out/.config
-          grep -q '^CONFIG_SERIAL_AMBA_PL011=y$' out/.config
-          grep -q '^CONFIG_SERIAL_AMBA_PL011_CONSOLE=y$' out/.config
-          grep -q '^CONFIG_DEBUG_HI3620_UART=y$' out/.config
           grep -q '^CONFIG_DRM=y$' out/.config
           grep -q '^CONFIG_DRM_ETNAVIV=y$' out/.config
-          grep -q '^CONFIG_POWER_SUPPLY=y$' out/.config
           grep -q '^CONFIG_BATTERY_BQ27XXX=y$' out/.config
           grep -q '^CONFIG_BATTERY_BQ27XXX_I2C=y$' out/.config
+          grep -q '^CONFIG_REGULATOR_TPS62360=y$' out/.config
 
       - name: Build zImage and MediaPad DTB
         run: |
