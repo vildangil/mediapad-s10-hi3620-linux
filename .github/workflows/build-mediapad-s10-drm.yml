@@ -1,0 +1,94 @@
+name: Build MediaPad S10 Hi3620 experimental DRM
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - drm-hi3620-edc-kms
+    paths:
+      - 'arch/arm/**'
+      - 'drivers/**'
+      - 'include/**'
+      - 'kernel/**'
+      - 'init/**'
+      - 'mm/**'
+      - 'fs/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - '.github/workflows/build-mediapad-s10.yml'
+      - '.github/workflows/build-mediapad-s10-drm.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      ARCH: arm
+      CROSS_COMPILE: arm-linux-gnueabi-
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ARM cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabi \
+            binutils-arm-linux-gnueabi \
+            bc bison flex libssl-dev make zip unzip python3-yaml
+          ${CROSS_COMPILE}gcc --version
+
+      - name: Reuse proven MediaPad build-time fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, yaml
+          wf = yaml.safe_load(pathlib.Path('.github/workflows/build-mediapad-s10.yml').read_text())
+          steps = wf['jobs']['build']['steps']
+          for step in steps:
+              if step.get('name') == 'Fix legacy build syntax for modern toolchains':
+                  pathlib.Path('/tmp/mediapad-build-fixes.sh').write_text(step['run'])
+                  break
+          else:
+              raise SystemExit('could not locate proven build-fix step')
+          PY
+          # The experimental DRM branch is forked from the hardware-bringup
+          # branch and needs exactly the same BQ/USB/TPS/etnaviv build fixes.
+          GITHUB_REF_NAME=pmos-hwbringup-20260909 bash /tmp/mediapad-build-fixes.sh
+
+      - name: Configure MediaPad Hi3620 kernel
+        run: |
+          mkdir -p out
+          make O=out hi3620_s10_defconfig
+          make O=out olddefconfig
+          grep -q '^CONFIG_DRM=y$' out/.config
+          grep -q '^CONFIG_DRM_ETNAVIV=y$' out/.config
+          grep -q '^CONFIG_DRM_HISI_HI3620_EDC=y$' out/.config
+          grep -E '^CONFIG_(DRM|DRM_ETNAVIV|DRM_HISI_HI3620_EDC|DRM_KMS_HELPER|DRM_KMS_CMA_HELPER|DRM_GEM_CMA_HELPER)=' out/.config || true
+
+      - name: Build zImage and hardware-bringup DTB
+        run: |
+          make -j"$(nproc)" O=out zImage
+          make -j"$(nproc)" O=out hi3620-s10-101x-hwbringup.dtb
+
+      - name: Create appended-DTB kernel
+        run: |
+          mkdir -p artifacts
+          cp out/arch/arm/boot/zImage artifacts/zImage
+          cp out/arch/arm/boot/dts/hi3620-s10-101x-hwbringup.dtb artifacts/hi3620-s10-101x.dtb
+          cat artifacts/zImage artifacts/hi3620-s10-101x.dtb > artifacts/zImage-dtb
+          cp out/.config artifacts/kernel.config
+          make -s O=out kernelrelease > artifacts/kernel.release
+          sha256sum artifacts/* | tee artifacts/SHA256SUMS
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mediapad-s10-hi3620-drm-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
