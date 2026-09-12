@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Experimental HiSilicon Hi3620 EDC0 DRM/KMS takeover driver.
+ * Experimental HiSilicon Hi3620 EDC0 DRM/KMS driver.
  *
  * The MediaPad 10 FHD bootloader leaves EDC0/LDI0/MIPI DSI running with the
- * Panasonic VVX10F002A00 at 1920x1200.  The first bring-up step deliberately
- * adopts that live pipeline instead of reinitialising display clocks, LDI or
- * DSI.  Atomic plane updates only replace the EDC0 CH1 framebuffer address,
- * stride/size/format and assert EDC DISP_CTL.cfg_ok.
+ * Panasonic VVX10F002A00 at 1920x1200.  Linux must therefore adopt the live
+ * scanout pipeline instead of resetting display clocks, LDI or DSI.
  *
- * This is intentionally board-scoped and experimental.  simplefb remains in
- * the DT as a console/fallback until the KMS takeover is proven reliable.
+ * Stage 2 is deliberately non-destructive at probe time: DRM/KMS is
+ * registered, but no DRM fbdev emulation is created.  This leaves simplefb
+ * and the bootloader scanout untouched until userspace explicitly performs a
+ * KMS modeset.  When that happens, program whichever EDC channel the
+ * bootloader actually left active (CH1 or CH2) instead of assuming CH1.
  */
 
 #include <linux/bitops.h>
@@ -26,37 +27,57 @@
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_simple_kms_helper.h>
 
-#define EDC_CH1L_ADDR		0x004
-#define EDC_CH1R_ADDR		0x008
-#define EDC_CH1_STRIDE		0x00c
-#define EDC_CH1_XY		0x010
-#define EDC_CH1_SIZE		0x014
-#define EDC_CH1_CTL		0x018
-#define EDC_DISP_SIZE		0x090
-#define EDC_DISP_CTL		0x094
-#define EDC_STS			0x09c
-#define EDC_INTS		0x0a0
-#define EDC_INTE		0x0a4
+#define EDC_ID                  0x000
 
-#define EDC_CH1_CTL_PIX_FMT_SHIFT	16
-#define EDC_CH1_CTL_PIX_FMT_MASK	GENMASK(18, 16)
-#define EDC_CH1_CTL_BGR		BIT(19)
-#define EDC_CH1_CTL_ENABLE		BIT(24)
+#define EDC_CH1L_ADDR           0x004
+#define EDC_CH1R_ADDR           0x008
+#define EDC_CH1_STRIDE          0x00c
+#define EDC_CH1_XY              0x010
+#define EDC_CH1_SIZE            0x014
+#define EDC_CH1_CTL             0x018
+
+#define EDC_CH2L_ADDR           0x024
+#define EDC_CH2R_ADDR           0x028
+#define EDC_CH2_STRIDE          0x02c
+#define EDC_CH2_XY              0x030
+#define EDC_CH2_SIZE            0x034
+#define EDC_CH2_CTL             0x038
+
+#define EDC_CH12_OVLY           0x044
+#define EDC_DISP_SIZE           0x090
+#define EDC_DISP_CTL            0x094
+#define EDC_STS                 0x09c
+#define EDC_INTS                0x0a0
+#define EDC_INTE                0x0a4
+
+#define EDC_CTL_PIX_FMT_SHIFT   16
+#define EDC_CTL_PIX_FMT_MASK    GENMASK(18, 16)
+#define EDC_CTL_BGR             BIT(19)
+#define EDC_CH1_CTL_ENABLE      BIT(24)
+#define EDC_CH2_CTL_ENABLE      BIT(21)
 
 /* Vendor k3_edc.h values. */
-#define EDC_FMT_XRGB8888	2
-#define EDC_FMT_ARGB8888	3
+#define EDC_FMT_XRGB8888        2
+#define EDC_FMT_ARGB8888        3
 
 /* EDC_DISP_CTL bit layout from Huawei's K3V2 vendor driver. */
-#define EDC_DISP_CTL_CFG_OK		BIT(1)
-#define EDC_DISP_CTL_ENABLE		BIT(10)
+#define EDC_DISP_CTL_CFG_OK     BIT(1)
+#define EDC_DISP_CTL_ENABLE     BIT(10)
+
+/* Known bootloader simplefb physical address on MediaPad 10 FHD. */
+#define S10_BOOT_FB_PHYS        0x2f300000
+
+enum hi3620_edc_channel {
+	HI3620_EDC_CH1 = 1,
+	HI3620_EDC_CH2 = 2,
+};
 
 struct hi3620_edc {
 	struct drm_device *drm;
-	struct drm_fbdev_cma *fbdev;
 	struct drm_simple_display_pipe pipe;
 	struct drm_connector connector;
 	void __iomem *regs;
+	enum hi3620_edc_channel channel;
 };
 
 static const struct drm_display_mode hi3620_panel_mode = {
@@ -66,9 +87,70 @@ static const struct drm_display_mode hi3620_panel_mode = {
 		 DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC)
 };
 
-static inline struct hi3620_edc *pipe_to_hi3620(struct drm_simple_display_pipe *pipe)
+static inline struct hi3620_edc *
+pipe_to_hi3620(struct drm_simple_display_pipe *pipe)
 {
 	return container_of(pipe, struct hi3620_edc, pipe);
+}
+
+static void hi3620_edc_get_channel_regs(struct hi3620_edc *edc,
+					u32 *laddr, u32 *raddr,
+					u32 *stride, u32 *xy,
+					u32 *size, u32 *ctl,
+					u32 *enable)
+{
+	if (edc->channel == HI3620_EDC_CH2) {
+		*laddr = EDC_CH2L_ADDR;
+		*raddr = EDC_CH2R_ADDR;
+		*stride = EDC_CH2_STRIDE;
+		*xy = EDC_CH2_XY;
+		*size = EDC_CH2_SIZE;
+		*ctl = EDC_CH2_CTL;
+		*enable = EDC_CH2_CTL_ENABLE;
+	} else {
+		*laddr = EDC_CH1L_ADDR;
+		*raddr = EDC_CH1R_ADDR;
+		*stride = EDC_CH1_STRIDE;
+		*xy = EDC_CH1_XY;
+		*size = EDC_CH1_SIZE;
+		*ctl = EDC_CH1_CTL;
+		*enable = EDC_CH1_CTL_ENABLE;
+	}
+}
+
+static void hi3620_edc_detect_boot_channel(struct hi3620_edc *edc)
+{
+	u32 ch1_addr = readl(edc->regs + EDC_CH1L_ADDR);
+	u32 ch2_addr = readl(edc->regs + EDC_CH2L_ADDR);
+	u32 ch1_ctl = readl(edc->regs + EDC_CH1_CTL);
+	u32 ch2_ctl = readl(edc->regs + EDC_CH2_CTL);
+	bool ch1_on = !!(ch1_ctl & EDC_CH1_CTL_ENABLE);
+	bool ch2_on = !!(ch2_ctl & EDC_CH2_CTL_ENABLE);
+
+	/*
+	 * Prefer an enabled channel.  If both/none are enabled, the known
+	 * bootloader framebuffer address is the strongest board-specific hint.
+	 * Old MediaPad logs consistently reported 0x2f300000 on channel 2.
+	 */
+	if (ch2_on && !ch1_on)
+		edc->channel = HI3620_EDC_CH2;
+	else if (ch1_on && !ch2_on)
+		edc->channel = HI3620_EDC_CH1;
+	else if (ch2_addr == S10_BOOT_FB_PHYS)
+		edc->channel = HI3620_EDC_CH2;
+	else if (ch1_addr == S10_BOOT_FB_PHYS)
+		edc->channel = HI3620_EDC_CH1;
+	else if (ch2_addr)
+		edc->channel = HI3620_EDC_CH2;
+	else
+		edc->channel = HI3620_EDC_CH1;
+
+	dev_info(edc->drm->dev,
+		 "HI3620-DRM-BOOT: id=%08x ch1_addr=%08x ch1_ctl=%08x en=%u ch2_addr=%08x ch2_ctl=%08x en=%u ovly=%08x selected=CH%u\n",
+		 readl(edc->regs + EDC_ID),
+		 ch1_addr, ch1_ctl, ch1_on,
+		 ch2_addr, ch2_ctl, ch2_on,
+		 readl(edc->regs + EDC_CH12_OVLY), edc->channel);
 }
 
 static void hi3620_edc_latch(struct hi3620_edc *edc)
@@ -87,6 +169,8 @@ static void hi3620_edc_program_plane(struct hi3620_edc *edc,
 	struct drm_framebuffer *fb = state->fb;
 	struct drm_gem_cma_object *gem;
 	dma_addr_t paddr;
+	u32 laddr_reg, raddr_reg, stride_reg, xy_reg, size_reg, ctl_reg;
+	u32 enable_bit;
 	u32 ctl, fmt;
 	u32 width, height;
 
@@ -103,25 +187,42 @@ static void hi3620_edc_program_plane(struct hi3620_edc *edc,
 		((state->src_x >> 16) * 4);
 	width = state->src_w >> 16;
 	height = state->src_h >> 16;
+	if (!width || !height)
+		return;
 
 	fmt = fb->pixel_format == DRM_FORMAT_ARGB8888 ?
 		EDC_FMT_ARGB8888 : EDC_FMT_XRGB8888;
 
-	/* Preserve bootloader/vendor tuning bits and touch only CH1 scanout fields. */
-	writel(lower_32_bits(paddr), edc->regs + EDC_CH1L_ADDR);
-	writel(lower_32_bits(paddr), edc->regs + EDC_CH1R_ADDR);
-	writel(fb->pitches[0] & GENMASK(13, 0), edc->regs + EDC_CH1_STRIDE);
-	writel(0, edc->regs + EDC_CH1_XY);
-	writel((height & 0xfff) | ((width & 0xfff) << 16),
-	       edc->regs + EDC_CH1_SIZE);
+	hi3620_edc_get_channel_regs(edc, &laddr_reg, &raddr_reg,
+				    &stride_reg, &xy_reg, &size_reg,
+				    &ctl_reg, &enable_bit);
 
-	ctl = readl(edc->regs + EDC_CH1_CTL);
-	ctl &= ~(EDC_CH1_CTL_PIX_FMT_MASK | EDC_CH1_CTL_BGR);
-	ctl |= fmt << EDC_CH1_CTL_PIX_FMT_SHIFT;
-	ctl |= EDC_CH1_CTL_ENABLE;
-	writel(ctl, edc->regs + EDC_CH1_CTL);
+	/*
+	 * Preserve bootloader/vendor tuning and overlay ordering.  Only replace
+	 * the selected live channel's scanout fields.
+	 */
+	writel(lower_32_bits(paddr), edc->regs + laddr_reg);
+	writel(lower_32_bits(paddr), edc->regs + raddr_reg);
+	writel(fb->pitches[0] & GENMASK(13, 0), edc->regs + stride_reg);
+	writel(0, edc->regs + xy_reg);
+
+	/* Huawei set_EDC_CH{1,2}_SIZE() stores size - 1 in each 12-bit field. */
+	writel(((height - 1) & 0xfff) | (((width - 1) & 0xfff) << 16),
+	       edc->regs + size_reg);
+
+	ctl = readl(edc->regs + ctl_reg);
+	ctl &= ~(EDC_CTL_PIX_FMT_MASK | EDC_CTL_BGR);
+	ctl |= fmt << EDC_CTL_PIX_FMT_SHIFT;
+	ctl |= enable_bit;
+	writel(ctl, edc->regs + ctl_reg);
 
 	hi3620_edc_latch(edc);
+
+	dev_info_ratelimited(edc->drm->dev,
+			     "HI3620-DRM-FLIP: ch=%u addr=%08x stride=%u size=%ux%u ctl=%08x disp_ctl=%08x\n",
+			     edc->channel, lower_32_bits(paddr), fb->pitches[0],
+			     width, height, readl(edc->regs + ctl_reg),
+			     readl(edc->regs + EDC_DISP_CTL));
 }
 
 static int hi3620_pipe_check(struct drm_simple_display_pipe *pipe,
@@ -130,7 +231,7 @@ static int hi3620_pipe_check(struct drm_simple_display_pipe *pipe,
 {
 	const struct drm_display_mode *m = &crtc_state->mode;
 
-	/* Stage 1 is takeover-only: never touch LDI/DSI timings. */
+	/* Takeover-only: never touch LDI/DSI timings. */
 	if (crtc_state->enable &&
 	    (m->hdisplay != 1920 || m->vdisplay != 1200 ||
 	     m->htotal != 2063 || m->vtotal != 1212))
@@ -152,7 +253,7 @@ static void hi3620_pipe_enable(struct drm_simple_display_pipe *pipe,
 
 static void hi3620_pipe_disable(struct drm_simple_display_pipe *pipe)
 {
-	/* Keep the bootloader-programmed pipeline alive during initial takeover. */
+	/* Never blank the bootloader pipeline during early bring-up. */
 }
 
 static void hi3620_pipe_update(struct drm_simple_display_pipe *pipe,
@@ -208,17 +309,8 @@ static const uint32_t hi3620_formats[] = {
 	DRM_FORMAT_ARGB8888,
 };
 
-static void hi3620_drm_output_poll_changed(struct drm_device *drm)
-{
-	struct hi3620_edc *edc = drm->dev_private;
-
-	if (edc->fbdev)
-		drm_fbdev_cma_hotplug_event(edc->fbdev);
-}
-
 static const struct drm_mode_config_funcs hi3620_mode_config_funcs = {
 	.fb_create = drm_fb_cma_create,
-	.output_poll_changed = hi3620_drm_output_poll_changed,
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
@@ -227,6 +319,12 @@ static int hi3620_drm_load(struct drm_device *drm, unsigned long flags)
 {
 	struct hi3620_edc *edc = drm->dev_private;
 	int ret;
+
+	/*
+	 * Read the bootloader state before creating KMS objects.  This is
+	 * diagnostic-only and does not touch the live display.
+	 */
+	hi3620_edc_detect_boot_channel(edc);
 
 	drm_mode_config_init(drm);
 	drm->mode_config.min_width = 1920;
@@ -243,7 +341,8 @@ static int hi3620_drm_load(struct drm_device *drm, unsigned long flags)
 	drm_connector_helper_add(&edc->connector, &hi3620_connector_helper_funcs);
 
 	ret = drm_simple_display_pipe_init(drm, &edc->pipe, &hi3620_pipe_funcs,
-					   hi3620_formats, ARRAY_SIZE(hi3620_formats),
+					   hi3620_formats,
+					   ARRAY_SIZE(hi3620_formats),
 					   &edc->connector);
 	if (ret)
 		goto err_connector;
@@ -254,24 +353,23 @@ static int hi3620_drm_load(struct drm_device *drm, unsigned long flags)
 	if (ret)
 		goto err_connector;
 
-	edc->fbdev = drm_fbdev_cma_init(drm, 32, 1, 1);
-	if (IS_ERR(edc->fbdev)) {
-		ret = PTR_ERR(edc->fbdev);
-		edc->fbdev = NULL;
-		goto err_vblank;
-	}
-
+	/*
+	 * Intentionally do NOT call drm_fbdev_cma_init() yet.  The previous
+	 * experiment performed an automatic KMS commit during probe and could
+	 * replace the live bootloader scanout before we had verified the active
+	 * EDC channel.  /dev/dri/card* is still fully registered; an explicit
+	 * userspace KMS commit will exercise hi3620_edc_program_plane().
+	 */
 	drm_kms_helper_poll_init(drm);
 
 	dev_info(drm->dev,
-		 "Hi3620 EDC0 KMS takeover ready: disp_ctl=%08x size=%08x sts=%08x ints=%08x inte=%08x\n",
-		 readl(edc->regs + EDC_DISP_CTL), readl(edc->regs + EDC_DISP_SIZE),
+		 "HI3620-DRM: KMS registered non-destructive: ch=%u disp_ctl=%08x size=%08x sts=%08x ints=%08x inte=%08x; simplefb retained until explicit modeset\n",
+		 edc->channel, readl(edc->regs + EDC_DISP_CTL),
+		 readl(edc->regs + EDC_DISP_SIZE),
 		 readl(edc->regs + EDC_STS), readl(edc->regs + EDC_INTS),
 		 readl(edc->regs + EDC_INTE));
 	return 0;
 
-err_vblank:
-	drm_vblank_cleanup(drm);
 err_connector:
 	drm_connector_cleanup(&edc->connector);
 err_config:
@@ -281,13 +379,7 @@ err_config:
 
 static int hi3620_drm_unload(struct drm_device *drm)
 {
-	struct hi3620_edc *edc = drm->dev_private;
-
 	drm_kms_helper_poll_fini(drm);
-	if (edc->fbdev) {
-		drm_fbdev_cma_fini(edc->fbdev);
-		edc->fbdev = NULL;
-	}
 	drm_vblank_cleanup(drm);
 	drm_mode_config_cleanup(drm);
 	return 0;
@@ -321,7 +413,7 @@ static struct drm_driver hi3620_drm_driver = {
 	.desc = "HiSilicon Hi3620 EDC0 DRM/KMS takeover",
 	.date = "20260912",
 	.major = 0,
-	.minor = 1,
+	.minor = 2,
 };
 
 static int hi3620_edc_probe(struct platform_device *pdev)
@@ -352,12 +444,14 @@ static int hi3620_edc_probe(struct platform_device *pdev)
 
 	ret = drm_dev_register(drm, 0);
 	if (ret) {
-		dev_err(&pdev->dev, "HI3620-DRM: drm_dev_register failed: %d\n", ret);
+		dev_err(&pdev->dev, "HI3620-DRM: drm_dev_register failed: %d\n",
+			ret);
 		drm_dev_unref(drm);
 		return ret;
 	}
 
-	dev_info(&pdev->dev, "HI3620-DRM: EDC0 registered\n");
+	dev_info(&pdev->dev,
+		 "HI3620-DRM: EDC0 registered without automatic scanout takeover\n");
 	return 0;
 }
 
@@ -372,7 +466,6 @@ static int hi3620_edc_remove(struct platform_device *pdev)
 
 static const struct of_device_id hi3620_edc_of_match[] = {
 	{ .compatible = "hisilicon,hi3620-edc-kms" },
-	/* Keep the original experimental spelling for old test DTBs. */
 	{ .compatible = "hisilicon,hi3620-edc-drm" },
 	{ }
 };
