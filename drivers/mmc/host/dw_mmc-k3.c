@@ -151,15 +151,54 @@ static const struct of_device_id dw_mci_k3_match[] = {
 };
 MODULE_DEVICE_TABLE(of, dw_mci_k3_match);
 
+static void dw_mci_hi3620_diag(struct dw_mci *host, int ret)
+{
+	unsigned long ciu_rate = 0;
+	unsigned long biu_rate = 0;
+
+	if (!host || !host->regs)
+		return;
+
+	if (!IS_ERR_OR_NULL(host->ciu_clk))
+		ciu_rate = clk_get_rate(host->ciu_clk);
+	if (!IS_ERR_OR_NULL(host->biu_clk))
+		biu_rate = clk_get_rate(host->biu_clk);
+
+	dev_info(host->dev,
+		 "HI3620-MMC-DIAG: ret=%d phys=%08llx ctrl=%08x pwren=%08x clkdiv=%08x clkena=%08x ctype=%08x status=%08x fifoth=%08x rint=%08x ciu=%lu biu=%lu bus=%u\n",
+		 ret, (unsigned long long)host->phy_regs,
+		 mci_readl(host, CTRL), mci_readl(host, PWREN),
+		 mci_readl(host, CLKDIV), mci_readl(host, CLKENA),
+		 mci_readl(host, CTYPE), mci_readl(host, STATUS),
+		 mci_readl(host, FIFOTH), mci_readl(host, RINTSTS),
+		 ciu_rate, biu_rate, host->bus_hz);
+}
+
 static int dw_mci_k3_probe(struct platform_device *pdev)
 {
 	const struct dw_mci_drv_data *drv_data;
 	const struct of_device_id *match;
+	struct dw_mci *host;
+	int ret;
 
 	match = of_match_node(dw_mci_k3_match, pdev->dev.of_node);
 	drv_data = match->data;
 
-	return dw_mci_pltfm_register(pdev, drv_data);
+	ret = dw_mci_pltfm_register(pdev, drv_data);
+
+	/*
+	 * MediaPad Hi3620 bring-up diagnostic.  fcd04000/eMMC works while the
+	 * SD and MMC3/SDIO controllers stall with CTRL_RESET asserted.  Dump the
+	 * same post-probe state for all three controllers so their live clocks and
+	 * core registers can be compared without changing reset/clock behaviour.
+	 */
+	if (of_device_is_compatible(pdev->dev.of_node,
+				    "hisilicon,hi4511-dw-mshc")) {
+		host = platform_get_drvdata(pdev);
+		dw_mci_hi3620_diag(host, ret);
+	}
+
+	return ret;
 }
 
 #ifdef CONFIG_PM_SLEEP
