@@ -148,6 +148,22 @@ static void hi3620_latch(struct hi3620_edc *edc)
 	wmb();
 }
 
+static void hi3620_complete_event(struct hi3620_edc *edc)
+{
+	struct drm_crtc *crtc = &edc->pipe.crtc;
+	unsigned long flags;
+
+	if (!crtc->state || !crtc->state->event)
+		return;
+
+	spin_lock_irqsave(&edc->drm->event_lock, flags);
+	if (crtc->state->event) {
+		drm_crtc_send_vblank_event(crtc, crtc->state->event);
+		crtc->state->event = NULL;
+	}
+	spin_unlock_irqrestore(&edc->drm->event_lock, flags);
+}
+
 static void hi3620_program_plane(struct hi3620_edc *edc,
 				 struct drm_plane_state *state)
 {
@@ -241,18 +257,27 @@ static int hi3620_pipe_check(struct drm_simple_display_pipe *pipe,
 static void hi3620_pipe_enable(struct drm_simple_display_pipe *pipe,
 			       struct drm_crtc_state *crtc_state)
 {
-	hi3620_program_plane(pipe_to_hi3620(pipe), pipe->plane.state);
+	struct hi3620_edc *edc = pipe_to_hi3620(pipe);
+
+	hi3620_program_plane(edc, pipe->plane.state);
+	hi3620_complete_event(edc);
 }
 
 static void hi3620_pipe_disable(struct drm_simple_display_pipe *pipe)
 {
-	/* Keep the bootloader pipeline alive. */
+	struct hi3620_edc *edc = pipe_to_hi3620(pipe);
+
+	/* Keep the bootloader pipeline alive, but do not strand an event. */
+	hi3620_complete_event(edc);
 }
 
 static void hi3620_pipe_update(struct drm_simple_display_pipe *pipe,
 			       struct drm_plane_state *old_state)
 {
-	hi3620_program_plane(pipe_to_hi3620(pipe), pipe->plane.state);
+	struct hi3620_edc *edc = pipe_to_hi3620(pipe);
+
+	hi3620_program_plane(edc, pipe->plane.state);
+	hi3620_complete_event(edc);
 }
 
 static const struct drm_simple_display_pipe_funcs hi3620_pipe_funcs = {
@@ -300,17 +325,18 @@ static const uint32_t hi3620_formats[] = {
 };
 
 /*
- * Stage-1 vblank support: the 4.9 DRM core calls ->enable_vblank() from
- * drm_atomic_helper_wait_for_vblanks().  Leaving this callback NULL caused the
- * Xorg modeset to jump to PC=0 after the first successful CH2 address update.
- *
- * For now deliberately do not touch EDC interrupt registers.  The Huawei
- * vendor ISR identifies bit 7 (0x80, bas_stat_int) as the video-mode frame
- * boundary, but its acknowledge semantics still need to be ported carefully.
- * Returning success here prevents the NULL callback crash; the atomic helper
- * may time out waiting for a counter change, which is safe for this bring-up
- * image and PageFlip=false userspace configuration.
+ * Stage-1 vblank support.  Hi3620 EDC has a real frame-boundary interrupt,
+ * but the vendor acknowledge semantics are not wired into DRM yet.  Linux 4.9
+ * nonetheless requires all three callbacks below after drm_vblank_init().
+ * A constant counter is valid while dev->max_vblank_count remains zero: the
+ * DRM core then falls back to its software/timestamp accounting and, at worst,
+ * waits for a bounded timeout instead of jumping through a NULL callback.
  */
+static u32 hi3620_get_vblank_counter(struct drm_device *drm, unsigned int pipe)
+{
+	return 0;
+}
+
 static int hi3620_enable_vblank(struct drm_device *drm, unsigned int pipe)
 {
 	if (pipe != 0)
@@ -414,6 +440,7 @@ static struct drm_driver hi3620_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.load = hi3620_drm_load,
 	.unload = hi3620_drm_unload,
+	.get_vblank_counter = hi3620_get_vblank_counter,
 	.enable_vblank = hi3620_enable_vblank,
 	.disable_vblank = hi3620_disable_vblank,
 	.gem_free_object = drm_gem_cma_free_object,
@@ -426,7 +453,7 @@ static struct drm_driver hi3620_drm_driver = {
 	.desc = "HiSilicon Hi3620 EDC0 DRM/KMS address-only takeover",
 	.date = "20260912",
 	.major = 0,
-	.minor = 4,
+	.minor = 5,
 };
 
 static int hi3620_edc_probe(struct platform_device *pdev)
@@ -464,7 +491,7 @@ static int hi3620_edc_probe(struct platform_device *pdev)
 	}
 
 	dev_info(&pdev->dev,
-		 "HI3620-DRM: EDC0 registered; KMS writes address only; vblank crash guard active\n");
+		 "HI3620-DRM: EDC0 registered; KMS address-only; software vblank compatibility active\n");
 	return 0;
 }
 
