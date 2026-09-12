@@ -10,6 +10,7 @@
 
 #include <linux/bitops.h>
 #include <linux/dma-mapping.h>
+#include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -43,6 +44,8 @@
 #define EDC_CH1_ENABLE          BIT(24)
 #define EDC_CH2_ENABLE          BIT(21)
 #define EDC_CFG_OK              BIT(1)
+#define EDC_INT_BAS_END         BIT(6)
+#define EDC_INT_BAS_STAT        BIT(7)
 #define S10_BOOT_FB_PHYS        0x2f300000
 
 enum hi3620_edc_channel {
@@ -58,6 +61,7 @@ struct hi3620_edc {
 	enum hi3620_edc_channel channel;
 	u32 boot_laddr;
 	u32 boot_raddr;
+	int irq;
 };
 
 static const struct drm_display_mode hi3620_panel_mode = {
@@ -325,30 +329,67 @@ static const uint32_t hi3620_formats[] = {
 };
 
 /*
- * Stage-1 vblank support.  Hi3620 EDC has a real frame-boundary interrupt,
- * but the vendor acknowledge semantics are not wired into DRM yet.  Linux 4.9
- * nonetheless requires all three callbacks below after drm_vblank_init().
- * A constant counter is valid while dev->max_vblank_count remains zero: the
- * DRM core then falls back to its software/timestamp accounting and, at worst,
- * waits for a bounded timeout instead of jumping through a NULL callback.
+ * Hi3620 EDC interrupt mask semantics match the Huawei vendor driver:
+ * one bits in EDC_INTE mask an interrupt.  Video mode uses BAS_STAT (bit 7)
+ * as the frame-start/vblank source and clears EDC_INTS by writing zero.
  */
+static irqreturn_t hi3620_edc_irq(int irq, void *data)
+{
+	struct hi3620_edc *edc = data;
+	u32 ints = readl(edc->regs + EDC_INTS);
+
+	if (!ints)
+		return IRQ_NONE;
+
+	/* Vendor driver acknowledges all latched EDC status bits with zero. */
+	writel(0, edc->regs + EDC_INTS);
+	wmb();
+
+	if (ints & EDC_INT_BAS_STAT)
+		drm_crtc_handle_vblank(&edc->pipe.crtc);
+
+	return IRQ_HANDLED;
+}
+
 static u32 hi3620_get_vblank_counter(struct drm_device *drm, unsigned int pipe)
 {
+	/* EDC exposes no convenient free-running frame counter; DRM counts IRQs. */
 	return 0;
 }
 
 static int hi3620_enable_vblank(struct drm_device *drm, unsigned int pipe)
 {
+	struct hi3620_edc *edc = drm->dev_private;
+	u32 mask;
+
 	if (pipe != 0)
 		return -EINVAL;
 
-	DRM_DEBUG_DRIVER("HI3620-DRM-VBLANK: temporary software enable\n");
+	/* Drop stale status before unmasking frame-start. */
+	writel(0, edc->regs + EDC_INTS);
+	mask = readl(edc->regs + EDC_INTE);
+	mask &= ~EDC_INT_BAS_STAT;
+	writel(mask, edc->regs + EDC_INTE);
+	wmb();
+
+	dev_info_ratelimited(drm->dev,
+		"HI3620-DRM-VBLANK: enabled bas-stat irq=%d inte=%08x\n",
+		edc->irq, readl(edc->regs + EDC_INTE));
 	return 0;
 }
 
 static void hi3620_disable_vblank(struct drm_device *drm, unsigned int pipe)
 {
-	DRM_DEBUG_DRIVER("HI3620-DRM-VBLANK: temporary software disable\n");
+	struct hi3620_edc *edc = drm->dev_private;
+	u32 mask;
+
+	if (pipe != 0)
+		return;
+
+	mask = readl(edc->regs + EDC_INTE);
+	mask |= EDC_INT_BAS_STAT;
+	writel(mask, edc->regs + EDC_INTE);
+	wmb();
 }
 
 static const struct drm_mode_config_funcs hi3620_mode_config_funcs = {
@@ -360,6 +401,7 @@ static const struct drm_mode_config_funcs hi3620_mode_config_funcs = {
 static int hi3620_drm_load(struct drm_device *drm, unsigned long flags)
 {
 	struct hi3620_edc *edc = drm->dev_private;
+	struct platform_device *pdev = to_platform_device(drm->dev);
 	int ret;
 
 	hi3620_detect_boot_channel(edc);
@@ -394,12 +436,26 @@ static int hi3620_drm_load(struct drm_device *drm, unsigned long flags)
 	if (ret)
 		goto err_connector;
 
+	edc->irq = platform_get_irq(pdev, 0);
+	if (edc->irq < 0) {
+		ret = edc->irq;
+		goto err_vblank;
+	}
+
+	ret = devm_request_irq(drm->dev, edc->irq, hi3620_edc_irq, 0,
+			       dev_name(drm->dev), edc);
+	if (ret) {
+		dev_err(drm->dev, "HI3620-DRM: request irq %d failed: %d\n",
+			edc->irq, ret);
+		goto err_vblank;
+	}
+
 	drm_kms_helper_poll_init(drm);
 
 	dev_info(drm->dev,
-		 "HI3620-DRM: address-only KMS ready: ch=%u "
+		 "HI3620-DRM: address-only KMS ready: ch=%u irq=%d "
 		 "disp_ctl=%08x size=%08x sts=%08x ints=%08x inte=%08x\n",
-		 edc->channel,
+		 edc->channel, edc->irq,
 		 readl(edc->regs + EDC_DISP_CTL),
 		 readl(edc->regs + EDC_DISP_SIZE),
 		 readl(edc->regs + EDC_STS),
@@ -407,6 +463,8 @@ static int hi3620_drm_load(struct drm_device *drm, unsigned long flags)
 		 readl(edc->regs + EDC_INTE));
 	return 0;
 
+err_vblank:
+	drm_vblank_cleanup(drm);
 err_connector:
 	drm_connector_cleanup(&edc->connector);
 err_config:
@@ -416,6 +474,13 @@ err_config:
 
 static int hi3620_drm_unload(struct drm_device *drm)
 {
+	struct hi3620_edc *edc = drm->dev_private;
+	u32 mask;
+
+	mask = readl(edc->regs + EDC_INTE);
+	mask |= EDC_INT_BAS_STAT;
+	writel(mask, edc->regs + EDC_INTE);
+
 	drm_kms_helper_poll_fini(drm);
 	drm_vblank_cleanup(drm);
 	drm_mode_config_cleanup(drm);
@@ -453,7 +518,7 @@ static struct drm_driver hi3620_drm_driver = {
 	.desc = "HiSilicon Hi3620 EDC0 DRM/KMS address-only takeover",
 	.date = "20260912",
 	.major = 0,
-	.minor = 5,
+	.minor = 6,
 };
 
 static int hi3620_edc_probe(struct platform_device *pdev)
@@ -491,7 +556,7 @@ static int hi3620_edc_probe(struct platform_device *pdev)
 	}
 
 	dev_info(&pdev->dev,
-		 "HI3620-DRM: EDC0 registered; KMS address-only; software vblank compatibility active\n");
+		 "HI3620-DRM: EDC0 registered; KMS address-only; bas-stat vblank IRQ active\n");
 	return 0;
 }
 
