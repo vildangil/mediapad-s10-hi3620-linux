@@ -27,6 +27,19 @@
 		cores = <&gpu>;
 	};
 
+	/*
+	 * Experimental DRM/KMS takeover of EDC0. The bootloader already leaves
+	 * EDC0 -> LDI0 -> MIPI DSI running at the panel's native 1920x1200 mode.
+	 * Stage 1 only replaces CH1 scanout buffers and never resets the pipeline.
+	 */
+	edc0_kms: display-controller@fa202000 {
+		compatible = "hisilicon,hi3620-edc-kms";
+		reg = <0xfa202000 0x00002000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 38 4>;
+		status = "okay";
+	};
+
 	/* First real audio bring-up: playback-only Hi3620 ASP + HI6421 speaker.
 	 * The board-local driver owns the ASP internal DMA and PMUSPI codec setup.
 	 */
