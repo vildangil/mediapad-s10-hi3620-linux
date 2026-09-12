@@ -88,10 +88,11 @@ CONFIG_FONT_SUN12x22=y
 CONFIG_BACKLIGHT_LCD_SUPPORT=y
 CONFIG_BACKLIGHT_CLASS_DEVICE=y
 
-# Hi3620 integrates a Vivante GC4000. Etnaviv remains diagnostic/render-only
-# until the chip identifies correctly; Xorg is forced to fbdev in userspace.
+# GC4000 remains a separate render-only DRM device. The experimental EDC0
+# driver supplies KMS/scanout while simplefb stays enabled as a boot fallback.
 CONFIG_DRM=y
 CONFIG_DRM_ETNAVIV=y
+CONFIG_DRM_HISI_HI3620_EDC=y
 # CONFIG_DRM_ETNAVIV_REGISTER_LOGGING is not set
 
 CONFIG_MMC=y
