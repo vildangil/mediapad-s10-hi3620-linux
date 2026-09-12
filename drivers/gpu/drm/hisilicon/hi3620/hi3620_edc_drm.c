@@ -3,7 +3,7 @@
  * Minimal HiSilicon Hi3620 EDC0 DRM/KMS bring-up driver.
  *
  * The MediaPad 10 FHD bootloader already leaves EDC0/LDI0/MIPI running.
- * Probe is non-destructive.  An explicit KMS commit changes only the active
+ * Probe is non-destructive. An explicit KMS commit changes only the active
  * EDC channel framebuffer address; all bootloader timing/format/overlay
  * registers are preserved.
  */
@@ -22,28 +22,28 @@
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_simple_kms_helper.h>
 
-#define EDC_ID			0x000
-#define EDC_CH1L_ADDR		0x004
-#define EDC_CH1R_ADDR		0x008
-#define EDC_CH1_STRIDE		0x00c
-#define EDC_CH1_SIZE		0x014
-#define EDC_CH1_CTL		0x018
-#define EDC_CH2L_ADDR		0x024
-#define EDC_CH2R_ADDR		0x028
-#define EDC_CH2_STRIDE		0x02c
-#define EDC_CH2_SIZE		0x034
-#define EDC_CH2_CTL		0x038
-#define EDC_CH12_OVLY		0x044
-#define EDC_DISP_SIZE		0x090
-#define EDC_DISP_CTL		0x094
-#define EDC_STS			0x09c
-#define EDC_INTS		0x0a0
-#define EDC_INTE		0x0a4
+#define EDC_ID                  0x000
+#define EDC_CH1L_ADDR           0x004
+#define EDC_CH1R_ADDR           0x008
+#define EDC_CH1_STRIDE          0x00c
+#define EDC_CH1_SIZE            0x014
+#define EDC_CH1_CTL             0x018
+#define EDC_CH2L_ADDR           0x024
+#define EDC_CH2R_ADDR           0x028
+#define EDC_CH2_STRIDE          0x02c
+#define EDC_CH2_SIZE            0x034
+#define EDC_CH2_CTL             0x038
+#define EDC_CH12_OVLY           0x044
+#define EDC_DISP_SIZE           0x090
+#define EDC_DISP_CTL            0x094
+#define EDC_STS                 0x09c
+#define EDC_INTS                0x0a0
+#define EDC_INTE                0x0a4
 
-#define EDC_CH1_ENABLE		BIT(24)
-#define EDC_CH2_ENABLE		BIT(21)
-#define EDC_CFG_OK		BIT(1)
-#define S10_BOOT_FB_PHYS	0x2f300000
+#define EDC_CH1_ENABLE          BIT(24)
+#define EDC_CH2_ENABLE          BIT(21)
+#define EDC_CFG_OK              BIT(1)
+#define S10_BOOT_FB_PHYS        0x2f300000
 
 enum hi3620_edc_channel {
 	HI3620_EDC_CH1 = 1,
@@ -181,10 +181,6 @@ static void hi3620_program_plane(struct hi3620_edc *edc,
 	hw_width = ((size >> 16) & 0xfff) + 1;
 	hw_height = (size & 0xfff) + 1;
 
-	/*
-	 * Never alter a live pipeline when Xorg proposes a layout different from
-	 * the one proven by the bootloader.
-	 */
 	if (fb->pitches[0] != stride ||
 	    width != hw_width || height != hw_height) {
 		dev_err(edc->drm->dev,
@@ -303,6 +299,32 @@ static const uint32_t hi3620_formats[] = {
 	DRM_FORMAT_ARGB8888,
 };
 
+/*
+ * Stage-1 vblank support: the 4.9 DRM core calls ->enable_vblank() from
+ * drm_atomic_helper_wait_for_vblanks().  Leaving this callback NULL caused the
+ * Xorg modeset to jump to PC=0 after the first successful CH2 address update.
+ *
+ * For now deliberately do not touch EDC interrupt registers.  The Huawei
+ * vendor ISR identifies bit 7 (0x80, bas_stat_int) as the video-mode frame
+ * boundary, but its acknowledge semantics still need to be ported carefully.
+ * Returning success here prevents the NULL callback crash; the atomic helper
+ * may time out waiting for a counter change, which is safe for this bring-up
+ * image and PageFlip=false userspace configuration.
+ */
+static int hi3620_enable_vblank(struct drm_device *drm, unsigned int pipe)
+{
+	if (pipe != 0)
+		return -EINVAL;
+
+	DRM_DEBUG_DRIVER("HI3620-DRM-VBLANK: temporary software enable\n");
+	return 0;
+}
+
+static void hi3620_disable_vblank(struct drm_device *drm, unsigned int pipe)
+{
+	DRM_DEBUG_DRIVER("HI3620-DRM-VBLANK: temporary software disable\n");
+}
+
 static const struct drm_mode_config_funcs hi3620_mode_config_funcs = {
 	.fb_create = drm_fb_cma_create,
 	.atomic_check = drm_atomic_helper_check,
@@ -392,6 +414,8 @@ static struct drm_driver hi3620_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.load = hi3620_drm_load,
 	.unload = hi3620_drm_unload,
+	.enable_vblank = hi3620_enable_vblank,
+	.disable_vblank = hi3620_disable_vblank,
 	.gem_free_object = drm_gem_cma_free_object,
 	.gem_vm_ops = &drm_gem_cma_vm_ops,
 	.dumb_create = drm_gem_cma_dumb_create,
@@ -402,7 +426,7 @@ static struct drm_driver hi3620_drm_driver = {
 	.desc = "HiSilicon Hi3620 EDC0 DRM/KMS address-only takeover",
 	.date = "20260912",
 	.major = 0,
-	.minor = 3,
+	.minor = 4,
 };
 
 static int hi3620_edc_probe(struct platform_device *pdev)
@@ -440,7 +464,7 @@ static int hi3620_edc_probe(struct platform_device *pdev)
 	}
 
 	dev_info(&pdev->dev,
-		 "HI3620-DRM: EDC0 registered; KMS writes address only\n");
+		 "HI3620-DRM: EDC0 registered; KMS writes address only; vblank crash guard active\n");
 	return 0;
 }
 
