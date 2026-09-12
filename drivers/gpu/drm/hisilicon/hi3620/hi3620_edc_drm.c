@@ -53,6 +53,7 @@
 
 struct hi3620_edc {
 	struct drm_device *drm;
+	struct drm_fbdev_cma *fbdev;
 	struct drm_simple_display_pipe pipe;
 	struct drm_connector connector;
 	void __iomem *regs;
@@ -211,7 +212,8 @@ static void hi3620_drm_output_poll_changed(struct drm_device *drm)
 {
 	struct hi3620_edc *edc = drm->dev_private;
 
-	drm_fbdev_cma_hotplug_event(edc->drm->fb_helper);
+	if (edc->fbdev)
+		drm_fbdev_cma_hotplug_event(edc->fbdev);
 }
 
 static const struct drm_mode_config_funcs hi3620_mode_config_funcs = {
@@ -252,9 +254,12 @@ static int hi3620_drm_load(struct drm_device *drm, unsigned long flags)
 	if (ret)
 		goto err_connector;
 
-	ret = drm_fbdev_cma_init(drm, 32, 1, 1);
-	if (ret)
-		goto err_connector;
+	edc->fbdev = drm_fbdev_cma_init(drm, 32, 1, 1);
+	if (IS_ERR(edc->fbdev)) {
+		ret = PTR_ERR(edc->fbdev);
+		edc->fbdev = NULL;
+		goto err_vblank;
+	}
 
 	drm_kms_helper_poll_init(drm);
 
@@ -265,6 +270,8 @@ static int hi3620_drm_load(struct drm_device *drm, unsigned long flags)
 		 readl(edc->regs + EDC_INTE));
 	return 0;
 
+err_vblank:
+	drm_vblank_cleanup(drm);
 err_connector:
 	drm_connector_cleanup(&edc->connector);
 err_config:
@@ -274,11 +281,31 @@ err_config:
 
 static int hi3620_drm_unload(struct drm_device *drm)
 {
+	struct hi3620_edc *edc = drm->dev_private;
+
 	drm_kms_helper_poll_fini(drm);
-	drm_fbdev_cma_fini(drm);
+	if (edc->fbdev) {
+		drm_fbdev_cma_fini(edc->fbdev);
+		edc->fbdev = NULL;
+	}
+	drm_vblank_cleanup(drm);
 	drm_mode_config_cleanup(drm);
 	return 0;
 }
+
+static const struct file_operations hi3620_drm_fops = {
+	.owner = THIS_MODULE,
+	.open = drm_open,
+	.release = drm_release,
+	.unlocked_ioctl = drm_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = drm_compat_ioctl,
+#endif
+	.poll = drm_poll,
+	.read = drm_read,
+	.llseek = no_llseek,
+	.mmap = drm_gem_cma_mmap,
+};
 
 static struct drm_driver hi3620_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
@@ -289,7 +316,7 @@ static struct drm_driver hi3620_drm_driver = {
 	.dumb_create = drm_gem_cma_dumb_create,
 	.dumb_map_offset = drm_gem_cma_dumb_map_offset,
 	.dumb_destroy = drm_gem_dumb_destroy,
-	.fops = &drm_fops,
+	.fops = &hi3620_drm_fops,
 	.name = "hi3620-edc",
 	.desc = "HiSilicon Hi3620 EDC0 DRM/KMS takeover",
 	.date = "20260912",
