@@ -258,7 +258,7 @@ struct clk_mmc {
 	u32		div_bits;
 	void __iomem	*drv_reg;
 	u32		drv_off;
-	u32		drv_bits;
+	u32			drv_bits;
 	void __iomem	*sam_reg;
 	u32		sam_off;
 	u32		sam_bits;
@@ -314,7 +314,7 @@ static int mmc_clk_determine_rate(struct clk_hw *hw,
 		req->rate = 180000000;
 		req->best_parent_rate = 1440000000;
 	}
-	return -EINVAL;
+	return 0;
 }
 
 static u32 mmc_clk_delay(u32 val, u32 para, u32 off, u32 len)
