@@ -64,11 +64,6 @@ static const struct drm_display_mode hi3620_panel_mode =
 		 1200, 1206, 1208, 1212, 0,
 		 DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC);
 
-static inline struct hi3620_edc *connector_to_hi3620(struct drm_connector *connector)
-{
-	return container_of(connector, struct hi3620_edc, connector);
-}
-
 static inline struct hi3620_edc *pipe_to_hi3620(struct drm_simple_display_pipe *pipe)
 {
 	return container_of(pipe, struct hi3620_edc, pipe);
@@ -100,8 +95,9 @@ static void hi3620_edc_program_plane(struct hi3620_edc *edc,
 	if (!gem)
 		return;
 
-	/* The simple-pipe helper disallows scaling. Account for a source offset. */
-	paddr = gem->paddr + ((state->src_y >> 16) * fb->pitches[0]) +
+	/* The simple-pipe helper disallows scaling. Account for FB/source offsets. */
+	paddr = gem->paddr + fb->offsets[0] +
+		((state->src_y >> 16) * fb->pitches[0]) +
 		((state->src_x >> 16) * 4);
 	width = state->src_w >> 16;
 	height = state->src_h >> 16;
@@ -170,13 +166,15 @@ static void hi3620_pipe_disable(struct drm_simple_display_pipe *pipe)
 }
 
 static void hi3620_pipe_update(struct drm_simple_display_pipe *pipe,
-			       struct drm_plane_state *plane_state)
+			       struct drm_plane_state *old_state)
 {
 	struct hi3620_edc *edc = pipe_to_hi3620(pipe);
+	struct drm_plane_state *new_state = pipe->plane.state;
 	struct drm_crtc *crtc = &pipe->crtc;
 	unsigned long flags;
 
-	hi3620_edc_program_plane(edc, plane_state);
+	/* drm_plane_helper atomic_update receives old_state; hardware needs new. */
+	hi3620_edc_program_plane(edc, new_state);
 
 	/* No vblank IRQ in takeover stage: complete atomic events immediately. */
 	if (crtc->state->event) {
