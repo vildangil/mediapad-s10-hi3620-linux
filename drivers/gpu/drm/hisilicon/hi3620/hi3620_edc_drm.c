@@ -331,6 +331,8 @@ static int hi3620_edc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
+	dev_info(&pdev->dev, "HI3620-DRM: EDC0 probe start\n");
+
 	edc = devm_kzalloc(&pdev->dev, sizeof(*edc), GFP_KERNEL);
 	if (!edc)
 		return -ENOMEM;
@@ -350,10 +352,12 @@ static int hi3620_edc_probe(struct platform_device *pdev)
 
 	ret = drm_dev_register(drm, 0);
 	if (ret) {
+		dev_err(&pdev->dev, "HI3620-DRM: drm_dev_register failed: %d\n", ret);
 		drm_dev_unref(drm);
 		return ret;
 	}
 
+	dev_info(&pdev->dev, "HI3620-DRM: EDC0 registered\n");
 	return 0;
 }
 
@@ -367,6 +371,8 @@ static int hi3620_edc_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id hi3620_edc_of_match[] = {
+	{ .compatible = "hisilicon,hi3620-edc-kms" },
+	/* Keep the original experimental spelling for old test DTBs. */
 	{ .compatible = "hisilicon,hi3620-edc-drm" },
 	{ }
 };
