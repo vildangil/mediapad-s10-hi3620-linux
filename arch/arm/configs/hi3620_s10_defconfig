@@ -31,6 +31,14 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_BLK_DEV_RAM=y
 CONFIG_BLK_DEV_RAM_SIZE=65536
 
+# EDC0 scanout uses drm_gem_cma. A 1920x1200 XRGB8888 framebuffer is about
+# 9.2 MiB, so reserve enough contiguous memory for double buffering plus
+# allocator overhead during the experimental KMS takeover.
+CONFIG_CMA=y
+CONFIG_DMA_CMA=y
+CONFIG_CMA_SIZE_MBYTES=32
+CONFIG_CMA_SIZE_SEL_MBYTES=y
+
 CONFIG_CGROUPS=y
 CONFIG_CGROUP_FREEZER=y
 CONFIG_CGROUP_DEVICE=y
