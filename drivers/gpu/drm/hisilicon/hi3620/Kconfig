@@ -1,0 +1,12 @@
+config DRM_HISI_HI3620_EDC
+	bool "HiSilicon Hi3620 EDC0 takeover KMS"
+	depends on DRM && OF && ARM && ARCH_HISI
+	select DRM_KMS_HELPER
+	select DRM_KMS_CMA_HELPER
+	help
+	  Experimental DRM/KMS driver for the Hi3620 EDC0 display controller
+	  used by the Huawei MediaPad 10 FHD.  The initial implementation adopts
+	  the display mode left running by the bootloader and only updates EDC0
+	  channel 1 scanout state.  It does not yet reinitialize LDI/MIPI DSI.
+
+	  This option is intended for S10-101x hardware bring-up only.
