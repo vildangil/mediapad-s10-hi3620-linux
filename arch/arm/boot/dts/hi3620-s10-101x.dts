@@ -137,9 +137,14 @@
 		};
 	};
 
-	mmc_clock: mmc-clock@fc802000 {
+	/*
+	 * The dedicated Hi3620 MMC CIU timing block lives in PCTRL, not SCTRL.
+	 * clk-hi3620.c accesses offsets 0x1f8/0x1fc relative to this node and the
+	 * Huawei vendor HIMCI driver uses REG_BASE_PCTRL for exactly those fields.
+	 */
+	mmc_clock: mmc-clock@fca09000 {
 		compatible = "hisilicon,hi3620-mmc-clock";
-		reg = <0xfc802000 0x1000>;
+		reg = <0xfca09000 0x1000>;
 		#clock-cells = <1>;
 	};
 
