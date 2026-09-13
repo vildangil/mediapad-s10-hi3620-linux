@@ -13,10 +13,14 @@
 		clock-frequency = <48000000>;
 	};
 
-	/* Vivante GC4000 integrated in Hi3620/K3V2. */
-	gpu: gpu@fa000000 {
+	/*
+	 * Vivante GC4000 integrated in Hi3620/K3V2. Huawei's K3V2 platform.h
+	 * places REG_BASE_G3D at 0xfa020000 (not 0xfa000000). The old base made
+	 * every Vivante identity register read as zero even with power/clocks on.
+	 */
+	gpu: gpu@fa020000 {
 		compatible = "vivante,gc";
-		reg = <0xfa000000 0x00040000>;
+		reg = <0xfa020000 0x00040000>;
 		interrupt-parent = <&gic>;
 		interrupts = <0 32 4>;
 		status = "okay";
