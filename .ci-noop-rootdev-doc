@@ -1,1 +1,0 @@
-Root-device test image uses pmos_root=/dev/mmcblk1p22 because eMMC enumerates as mmc1 after MMC host fixes.
