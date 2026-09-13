@@ -108,6 +108,21 @@
 	pre-power-on-delay-ms = <100>;
 };
 
+/* Huawei's K3V2 iomux table programs SDIO1 on GPIO100..105 as FUNC1, not
+ * FUNC0. The base bring-up DTS used 0 here, leaving the BCM4330 bus on the
+ * wrong mux even though the MMC3 controller itself had become operational. */
+&sdio1_pins {
+	pinctrl-single,pins = <
+		0x0cc 0x1	/* IOMG51: CLK/CMD/DATA0/DATA2/DATA3 */
+		0x0d0 0x1	/* IOMG52: DATA1 */
+	>;
+};
+
+/* Apply the vendor NORMAL electrical configuration together with the mux. */
+&wifi_sdio {
+	pinctrl-0 = <&sdio1_pins &sdio1_cfg>;
+};
+
 /* Keep the external GPU DCDC experiment disabled for now. The previous test
  * asserted GPIO19 before the I2C3/TPS6236x path had successfully probed and
  * immediately correlated with an RCU stall after DRM core initialization. */
@@ -132,6 +147,22 @@
 		>;
 		pinctrl-single,bias-pulldown = <0 2 0 2>;
 		pinctrl-single,bias-pullup = <0 1 0 1>;
+		pinctrl-single,drive-strength = <0x30 0xf0>;
+	};
+
+	/* Vendor k3v2_iomux_pins.h: IOCG119..124 are SDIO1 CLK/CMD/DATA0..3.
+	 * NORMAL mode is PULLDOWN + LEVEL2. On K3V2 PULLDOWN=2 and LEVEL2=3,
+	 * so the controlled bits become 0x02 | (0x3 << 4) = 0x32. */
+	sdio1_cfg: sdio1-cfg {
+		pinctrl-single,pins = <
+			0x1bc 0	/* IOCG119 / absolute IOC 0x9bc */
+			0x1c0 0	/* IOCG120 / absolute IOC 0x9c0 */
+			0x1c4 0	/* IOCG121 / absolute IOC 0x9c4 */
+			0x1c8 0	/* IOCG122 / absolute IOC 0x9c8 */
+			0x1cc 0	/* IOCG123 / absolute IOC 0x9cc */
+			0x1d0 0	/* IOCG124 / absolute IOC 0x9d0 */
+		>;
+		pinctrl-single,bias-pulldown = <0x2 0x2 0x0 0x3>;
 		pinctrl-single,drive-strength = <0x30 0xf0>;
 	};
 };
