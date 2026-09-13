@@ -16,7 +16,7 @@
 
 #define HI3620_SCTRL_PHYS              0xfc802000
 #define HI3620_PCTRL_PHYS              0xfca09000
-#define HI3620_G3D_PHYS                0xfa020000
+#define HI3620_G3D_PHYS                0xfa000000
 #define HI3620_MAP_SIZE                0x1000
 
 /* SCTRL clock/reset registers. */
