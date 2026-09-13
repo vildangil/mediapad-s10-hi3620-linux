@@ -18,7 +18,7 @@
 #define HI3620_PMCTRL_PHYS             0xfca08000
 #define HI3620_PCTRL_PHYS              0xfca09000
 #define HI3620_PMUSPI_PHYS             0xfcc00000
-#define HI3620_G3D_PHYS                0xfa000000
+#define HI3620_G3D_PHYS                0xfa020000
 #define HI3620_MAP_SIZE                0x1000
 
 /* SYSCTRL clock/reset/power registers from Huawei K3V2. */
@@ -196,9 +196,6 @@ static void hi3620_mediapad_prepare_wifi(void __iomem *pmu)
 
 static void hi3620_mediapad_dump_gpu(void __iomem *g3d)
 {
-        /* Keep this read-only.  The Etnaviv node is disabled while the raw
-         * identity is zero, so a bad DRM node cannot poison Mesa/X.  These
-         * offsets are identical in Huawei's galcore and Etnaviv state_hi. */
         pr_info("HI3620-GPU-ID: clock=%08x idle=%08x identity=%08x feature=%08x model=%08x rev=%08x date=%08x time=%08x minor0=%08x\n",
                 readl(g3d + G3D_HI_CLOCK_CONTROL),
                 readl(g3d + G3D_HI_IDLE_STATE),
