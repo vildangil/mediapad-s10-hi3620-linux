@@ -1,2 +1,1 @@
-Harmless CI retrigger for the experimental Hi3620 DRM branch.
-No source or build configuration changes.
+retrigger 2026-09-13 gpu rollback display regression
