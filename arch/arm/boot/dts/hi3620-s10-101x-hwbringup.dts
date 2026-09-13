@@ -101,6 +101,13 @@
 	};
 };
 
+/* Match Huawei's BCM4330 reset timing exactly: WL_REG_ON stays low for
+ * 100 ms before being released, then the existing 200 ms post-delay lets
+ * the chip settle before MMC3 starts SDIO enumeration. */
+&wifi_pwrseq {
+	pre-power-on-delay-ms = <100>;
+};
+
 /* Keep the external GPU DCDC experiment disabled for now. The previous test
  * asserted GPIO19 before the I2C3/TPS6236x path had successfully probed and
  * immediately correlated with an RCU stall after DRM core initialization. */

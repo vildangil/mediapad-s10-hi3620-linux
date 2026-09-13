@@ -90,7 +90,7 @@
 #define PMU_BUCK2_1V1_VSEL             56
 #define PMU_LDO_ENABLE                 0x10
 #define PMU_LDO_VSEL_MASK              0x07
-#define PMU_LDO14_2V85_VSEL            6
+#define PMU_LDO14_1V8_VSEL             1
 #define PMU_LDO15_3V3_VSEL             7
 #define PMU_32KB_ENABLE                BIT(1)
 
@@ -178,8 +178,10 @@ static void hi3620_mediapad_prepare_wifi(void __iomem *pmu)
 {
         u8 ldo14_old, ldo15_old, clk32_old;
 
+        /* Huawei maps wifiio-vcc to HI6421 LDO14 and explicitly requests
+         * 1.8 V before WL_REG_ON.  LDO15 is the 3.3 V Wi-Fi core/VBAT rail. */
         ldo14_old = hi3620_pmu_ldo_enable(pmu, PMU_LDO14_CTRL,
-                                          PMU_LDO14_2V85_VSEL);
+                                          PMU_LDO14_1V8_VSEL);
         ldo15_old = hi3620_pmu_ldo_enable(pmu, PMU_LDO15_CTRL,
                                           PMU_LDO15_3V3_VSEL);
 
@@ -188,7 +190,7 @@ static void hi3620_mediapad_prepare_wifi(void __iomem *pmu)
         mb();
         udelay(100);
 
-        pr_info("HI3620-WIFI-PWR: ldo14 %02x->%02x ldo15 %02x->%02x pmu32k %02x->%02x\n",
+        pr_info("HI3620-WIFI-PWR: ldo14 %02x->%02x (1v8) ldo15 %02x->%02x (3v3) pmu32k %02x->%02x\n",
                 ldo14_old, readb(pmu + PMU_LDO14_CTRL),
                 ldo15_old, readb(pmu + PMU_LDO15_CTRL),
                 clk32_old, readb(pmu + PMU_32K_EN));
