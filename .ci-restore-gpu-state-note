@@ -1,0 +1,1 @@
+Restore 8dce GPU/MMIO source state; boot failure was root-device renumbering, not GPU regression.
