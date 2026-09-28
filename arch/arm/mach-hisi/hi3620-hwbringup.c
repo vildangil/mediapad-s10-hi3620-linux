@@ -280,7 +280,16 @@ static int __init hi3620_mediapad_hwbringup(void)
         pr_info("HI3620-HW: MediaPad hardware bring-up start\n");
         hi3620_mediapad_prepare_wifi(pmu);
         hi3620_mediapad_prepare_resets(sctrl, pctrl);
-        hi3620_mediapad_prepare_gpu(sctrl, pmctrl, pmu);
+
+        /*
+         * Do not touch the unproven G3D power/reset domain on the stable
+         * simplefb DT. Only the explicit hwbringup DT contains vivante,gc.
+         */
+        if (of_find_compatible_node(NULL, NULL, "vivante,gc"))
+                hi3620_mediapad_prepare_gpu(sctrl, pmctrl, pmu);
+        else
+                pr_info("HI3620-GPU-PWR: skipped (no vivante,gc DT node)\n");
+
         pr_info("HI3620-HW: MediaPad hardware bring-up complete\n");
 
 out:
