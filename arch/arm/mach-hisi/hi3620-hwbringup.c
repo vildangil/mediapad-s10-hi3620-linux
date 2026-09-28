@@ -80,7 +80,7 @@
 #define PMU_BUCK2_1V1_VSEL             56
 #define PMU_LDO_ENABLE                 0x10
 #define PMU_LDO_VSEL_MASK              0x07
-#define PMU_LDO14_1V8_VSEL            6
+#define PMU_LDO14_1V8_VSEL            1
 #define PMU_LDO15_3V3_VSEL             7
 #define PMU_32KB_ENABLE                BIT(1)
 
