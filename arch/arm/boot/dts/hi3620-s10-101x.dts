@@ -50,6 +50,7 @@
 	wifi_pwrseq: wifi-pwrseq {
 		compatible = "mmc-pwrseq-simple";
 		reset-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+		pre-power-on-delay-ms = <100>;
 		post-power-on-delay-ms = <200>;
 	};
 
@@ -205,7 +206,7 @@
 		keep-power-in-suspend;
 		mmc-pwrseq = <&wifi_pwrseq>;
 		pinctrl-names = "default";
-		pinctrl-0 = <&sdio1_pins>;
+		pinctrl-0 = <&sdio1_pins &sdio1_cfg>;
 		status = "okay";
 	};
 };
@@ -219,12 +220,28 @@
 		>;
 	};
 
-	/* Vendor NORMAL mode for GPIO100..105 / SDIO1 is function 0. */
+	/* Huawei K3V2 iomux maps GPIO100..105 / SDIO1 to FUNC1. */
 	sdio1_pins: sdio1-pins {
 		pinctrl-single,pins = <
-			0x0cc 0x0
-			0x0d0 0x0
+			0x0cc 0x1	/* IOMG51: CLK/CMD/DATA0/DATA2/DATA3 */
+			0x0d0 0x1	/* IOMG52: DATA1 */
 		>;
+	};
+};
+
+&pmx1 {
+	/* IOCG119..124: Huawei NORMAL mode is pulldown, drive LEVEL2. */
+	sdio1_cfg: sdio1-cfg {
+		pinctrl-single,pins = <
+			0x1bc 0
+			0x1c0 0
+			0x1c4 0
+			0x1c8 0
+			0x1cc 0
+			0x1d0 0
+		>;
+		pinctrl-single,bias-pulldown = <0x2 0x2 0x0 0x3>;
+		pinctrl-single,drive-strength = <0x30 0xf0>;
 	};
 };
 
