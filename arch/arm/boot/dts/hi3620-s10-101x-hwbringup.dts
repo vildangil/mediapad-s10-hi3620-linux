@@ -64,11 +64,27 @@
 	};
 };
 
-/* Use the actual Hi3620 mmc_clk3 chain for BCM4330 SDIO. */
+/*
+ * Keep the base S10 MMC3 clock wiring here.  In particular, do not replace
+ * HI3620_MMC_CIUCLK3 with the plain MMC_CLK3 gate: the CIU wrapper also
+ * programs the K3V2 sample/drive/divider timing used by this controller.
+ */
+
+/* Match Huawei's BCM4330 WL_REG_ON reset hold before releasing the chip. */
+&wifi_pwrseq {
+	pre-power-on-delay-ms = <100>;
+};
+
+/* Huawei's K3V2 iomux table routes GPIO100..105 to SDIO1 with FUNC1. */
+&sdio1_pins {
+	pinctrl-single,pins = <
+		0x0cc 0x1	/* IOMG51: CLK/CMD/DATA0/DATA2/DATA3 */
+		0x0d0 0x1	/* IOMG52: DATA1 */
+	>;
+};
+
 &wifi_sdio {
-	clocks = <&clock HI3620_MMC_CLK3>,
-		 <&clock HI3620_DDRC_PER_CLK>;
-	clock-names = "ciu", "biu";
+	pinctrl-0 = <&sdio1_pins &sdio1_cfg>;
 };
 
 &pmx0 {
@@ -78,5 +94,24 @@
 	 * Select function 0 here so GPIO84/85 are driven by native I2C0. */
 	i2c0_pins: i2c0-pins {
 		pinctrl-single,pins = <0x0b4 0x0>;
+	};
+};
+
+&pmx1 {
+	/*
+	 * IOCG119..124 are SDIO1 CLK/CMD/DATA0..3.  Use the vendor NORMAL
+	 * pulldown/drive setting together with the corrected mux above.
+	 */
+	sdio1_cfg: sdio1-cfg {
+		pinctrl-single,pins = <
+			0x1bc 0
+			0x1c0 0
+			0x1c4 0
+			0x1c8 0
+			0x1cc 0
+			0x1d0 0
+		>;
+		pinctrl-single,bias-pulldown = <0x2 0x2 0x0 0x3>;
+		pinctrl-single,drive-strength = <0x30 0xf0>;
 	};
 };
