@@ -8,6 +8,7 @@
 
 #include "hi3620.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
 
 / {
 	model = "Huawei MediaPad 10 FHD S10-101x";
@@ -16,6 +17,27 @@
 	chosen {
 		bootargs = "console=ttyAMA0,115200n8 earlyprintk ignore_loglevel loglevel=8 root=/dev/ram0 rw";
 		stdout-path = "serial0:115200n8";
+	};
+
+	/* Proven on the S10: GPIO137/138 are the active-low volume keys. */
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		volume-up {
+			label = "Volume Up";
+			gpios = <&gpio17 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <20>;
+			wakeup-source;
+		};
+
+		volume-down {
+			label = "Volume Down";
+			gpios = <&gpio17 2 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEDOWN>;
+			debounce-interval = <20>;
+			wakeup-source;
+		};
 	};
 
 	framebuffer0: framebuffer@2f300000 {
@@ -52,6 +74,30 @@
 		reset-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
 		pre-power-on-delay-ms = <100>;
 		post-power-on-delay-ms = <200>;
+	};
+
+	/*
+	 * BQ27510 fuel gauge on the physical K3V2 I2C0 bus. Huawei's vendor
+	 * clock table feeds DesignWare I2C from 48 MHz cfgaxi and IOMG45 uses
+	 * FUNC1 for GPIO84/85 (SCL/SDA).
+	 */
+	i2c0: i2c@fcb08000 {
+		compatible = "snps,designware-i2c";
+		reg = <0xfcb08000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 28 4>;
+		clocks = <&clock HI3620_I2CCLK0>;
+		clock-frequency = <100000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c0_pins &i2c0_cfg>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		battery@55 {
+			compatible = "ti,bq27510";
+			reg = <0x55>;
+		};
 	};
 
 	/* Alternate touchscreen controller/bus variant is not used on this tablet. */
@@ -212,6 +258,11 @@
 };
 
 &pmx0 {
+	/* Huawei K3V2 pin database: IOMG45 FUNC1 is I2C0 SCL/SDA. */
+	i2c0_pins: i2c0-pins {
+		pinctrl-single,pins = <0x0b4 0x1>;
+	};
+
 	/* IOMG26/IOMG27 function 1 routes the former I2C2 pads to PL061 GPIO. */
 	i2c2_gpio_pins: i2c2-gpio-pins {
 		pinctrl-single,pins = <
@@ -230,6 +281,15 @@
 };
 
 &pmx1 {
+	/* IOCG103/104: vendor NORMAL mode for I2C0 is pulldown. */
+	i2c0_cfg: i2c0-cfg {
+		pinctrl-single,pins = <
+			0x17c 0
+			0x180 0
+		>;
+		pinctrl-single,bias-pulldown = <0x2 0x2 0x0 0x3>;
+	};
+
 	/* IOCG119..124: Huawei NORMAL mode is pulldown, drive LEVEL2. */
 	sdio1_cfg: sdio1-cfg {
 		pinctrl-single,pins = <
