@@ -78,7 +78,7 @@
 #define PMU_BUCK2_1V1_VSEL             56
 #define PMU_LDO_ENABLE                 0x10
 #define PMU_LDO_VSEL_MASK              0x07
-#define PMU_LDO14_2V85_VSEL            6
+#define PMU_LDO14_1V8_VSEL             1
 #define PMU_LDO15_3V3_VSEL             7
 #define PMU_32KB_ENABLE                BIT(1)
 
@@ -167,8 +167,9 @@ static void hi3620_mediapad_prepare_wifi(void __iomem *pmu)
 {
         u8 ldo14_old, ldo15_old, clk32_old;
 
+        /* BCM4330 I/O is 1.8 V on the Huawei board; LDO15 supplies 3.3 V. */
         ldo14_old = hi3620_pmu_ldo_enable(pmu, PMU_LDO14_CTRL,
-                                          PMU_LDO14_2V85_VSEL);
+                                          PMU_LDO14_1V8_VSEL);
         ldo15_old = hi3620_pmu_ldo_enable(pmu, PMU_LDO15_CTRL,
                                           PMU_LDO15_3V3_VSEL);
 
