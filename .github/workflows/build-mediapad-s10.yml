@@ -12,6 +12,7 @@ on:
     branches:
       - mediapad-s10-hi3620
       - pmos-hwbringup-20260909
+      - pmos-dangerous-hw-experiments
     paths:
       - 'arch/arm/**'
       - 'drivers/**'
