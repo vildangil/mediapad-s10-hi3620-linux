@@ -48,7 +48,9 @@
 #define RST_I2C0                       BIT(24)
 #define RST_I2C2                       BIT(28)
 
-/* MMC3 is the MediaPad SDIO1 host used by BCM4330 Wi-Fi. */
+/* Huawei K3V2 clock table: SD is gate/reset 20/23, MMC3 is 23/26. */
+#define CLK_SD                         BIT(20)
+#define RST_SD                         BIT(23)
 #define CLK_MMC3                       BIT(23)
 #define RST_MMC3                       BIT(26)
 
@@ -137,29 +139,40 @@ static void hi3620_mediapad_prepare_resets(void __iomem *sctrl,
          * unused native block out of reset so it cannot surprise later tests. */
         writel(RST_I2C2, sctrl + SCTRL_RST_DIS2);
 
-        /* Huawei's clk_mmc3 couples gate bit23 with external reset bit26.
-         * Pulse that reset while the CIU clock is live before DW-MSHC tries
-         * its own CTRL_RESET. The previous deassert-only sequence still left
-         * fcd06000 stuck at ctrl reset 0x2. */
-        writel(RST_MMC3, sctrl + SCTRL_RST_EN3);
+        /*
+         * Dangerous bring-up experiment: both removable-media DW-MSHC blocks
+         * return 0x00000002 from every register and time out on CTRL_RESET,
+         * while eMMC works. Huawei's old sys_ctrl sequence enables the host
+         * clock first, waits ~2 ms, asserts the external reset, waits ~2 ms,
+         * deasserts it, then waits again. Reproduce that timing for SD and
+         * MMC3 instead of the old 10 us MMC3-only pulse.
+         */
+        writel(CLK_SD | CLK_MMC3, sctrl + SCTRL_CLK_EN3);
         mb();
-        hi3620_wait_reset(sctrl, SCTRL_RST_STATUS3, RST_MMC3, true);
-        writel(CLK_MMC3, sctrl + SCTRL_CLK_EN3);
-        mb();
-        udelay(10);
-        writel(RST_MMC3, sctrl + SCTRL_RST_DIS3);
-        mb();
-        hi3620_wait_reset(sctrl, SCTRL_RST_STATUS3, RST_MMC3, false);
-        udelay(10);
+        msleep(2);
 
-        pr_info("HI3620-HW-RESET: rst2 %08x->%08x i2c0=%u i2c2=%u pctrl0=%08x rst3 %08x->%08x mmc3_rst=%u clk3 %08x->%08x mmc3_clk=%u\n",
+        writel(RST_SD | RST_MMC3, sctrl + SCTRL_RST_EN3);
+        mb();
+        hi3620_wait_reset(sctrl, SCTRL_RST_STATUS3,
+                          RST_SD | RST_MMC3, true);
+        msleep(2);
+
+        writel(RST_SD | RST_MMC3, sctrl + SCTRL_RST_DIS3);
+        mb();
+        hi3620_wait_reset(sctrl, SCTRL_RST_STATUS3,
+                          RST_SD | RST_MMC3, false);
+        msleep(2);
+
+        pr_info("HI3620-HW-RESET: rst2 %08x->%08x i2c0=%u i2c2=%u pctrl0=%08x rst3 %08x->%08x sd_rst=%u mmc3_rst=%u clk3 %08x->%08x sd_clk=%u mmc3_clk=%u\n",
                 rst2_before, readl(sctrl + SCTRL_RST_STATUS2),
                 !!(readl(sctrl + SCTRL_RST_STATUS2) & RST_I2C0),
                 !!(readl(sctrl + SCTRL_RST_STATUS2) & RST_I2C2),
                 readl(pctrl + PCTRL_PERI_CTRL0),
                 rst3_before, readl(sctrl + SCTRL_RST_STATUS3),
+                !!(readl(sctrl + SCTRL_RST_STATUS3) & RST_SD),
                 !!(readl(sctrl + SCTRL_RST_STATUS3) & RST_MMC3),
                 clk3_before, readl(sctrl + SCTRL_CLK_STATUS3),
+                !!(readl(sctrl + SCTRL_CLK_STATUS3) & CLK_SD),
                 !!(readl(sctrl + SCTRL_CLK_STATUS3) & CLK_MMC3));
 }
 
