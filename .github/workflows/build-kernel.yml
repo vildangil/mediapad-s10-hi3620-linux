@@ -62,12 +62,12 @@ jobs:
           PY
 
       - name: Configure MediaPad Hi3620 kernel
+        shell: bash
         run: |
+          set -euxo pipefail
           mkdir -p out
           make O=out hi3620_s10_defconfig
           make O=out olddefconfig
-
-          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER|DRM|DRM_ETNAVIV|POWER_SUPPLY|BATTERY_BQ27XXX|BATTERY_BQ27XXX_I2C)=' out/.config || true
 
           grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
           grep -q '^CONFIG_ARCH_HISI=y$' out/.config
