@@ -1,0 +1,157 @@
+name: Build NOT AI! kernel (unstable)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version, e.g. 0.1.1 (leave empty for build only)'
+        required: false
+        default: ''
+        type: string
+    paths:
+      - 'arch/arm/**'
+      - 'drivers/**'
+      - 'include/**'
+      - 'kernel/**'
+      - 'init/**'
+      - 'mm/**'
+      - 'fs/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - '.github/workflows/build-mediapad-s10.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    env:
+      ARCH: arm
+      CROSS_COMPILE: arm-linux-gnueabi-
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ARM cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabi \
+            binutils-arm-linux-gnueabi \
+            bc bison flex libssl-dev make zip unzip
+
+          ${CROSS_COMPILE}gcc --version
+          ${CROSS_COMPILE}as --version | head -n 1
+
+      - name: Fix legacy build syntax for modern toolchains
+        run: |
+          sed -i 's/^YYLTYPE yylloc;$/extern YYLTYPE yylloc;/' \
+            scripts/dtc/dtc-lexer.l \
+            scripts/dtc/dtc-lexer.lex.c_shipped
+
+          sed -i 's/\.section "\.proc\.info\.init", #alloc/.section ".proc.info.init", "a"/' \
+            arch/arm/mm/proc-v7.S
+          sed -i 's/\.section "\.start", #alloc, #execinstr/.section ".start", "ax"/' \
+            arch/arm/boot/compressed/head.S
+          sed -i 's/\.section \.piggydata,#alloc/.section .piggydata,"a"/' \
+            arch/arm/boot/compressed/piggy.S
+
+          # Linux 4.9/4.14 RMI4 F11 writes controls back to the wrong base.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('drivers/input/rmi4/rmi_f11.c')
+          s = p.read_text()
+          old = '&f11->dev_controls, fn->fd.query_base_addr);'
+          new = '&f11->dev_controls, fn->fd.control_base_addr);'
+          count = s.count(old)
+          if count != 2:
+              raise SystemExit(f'expected 2 F11 control-base typos, found {count}')
+          p.write_text(s.replace(old, new))
+          PY
+
+      - name: Configure MediaPad Hi3620 kernel
+        run: |
+          mkdir -p out
+          make O=out hi3620_s10_defconfig
+          make O=out olddefconfig
+
+          grep -E '^CONFIG_(ARCH_MULTI_V7|ARCH_HISI|ARCH_HI3xxx|CPU_V7|CPU_32v7|SMP|NR_CPUS|ARM_APPENDED_DTB|ARM_ATAG_DTB_COMPAT|SERIAL_AMBA_PL011|SERIAL_AMBA_PL011_CONSOLE|DEBUG_HI3620_UART|WLAN|WIRELESS|CFG80211|BRCMFMAC|BRCMFMAC_SDIO|PWRSEQ_SIMPLE|FW_LOADER|DRM|DRM_ETNAVIV|POWER_SUPPLY|BATTERY_BQ27XXX|BATTERY_BQ27XXX_I2C)=' out/.config || true
+
+          grep -q '^CONFIG_ARCH_MULTI_V7=y$' out/.config
+          grep -q '^CONFIG_ARCH_HISI=y$' out/.config
+          grep -q '^CONFIG_ARCH_HI3xxx=y$' out/.config
+          grep -q '^CONFIG_CPU_V7=y$' out/.config
+          grep -q '^CONFIG_CPU_32v7=y$' out/.config
+          grep -q '^CONFIG_SMP=y$' out/.config
+          grep -q '^CONFIG_NR_CPUS=4$' out/.config
+          grep -q '^CONFIG_ARM_APPENDED_DTB=y$' out/.config
+          grep -q '^CONFIG_ARM_ATAG_DTB_COMPAT=y$' out/.config
+          grep -q '^CONFIG_SERIAL_AMBA_PL011=y$' out/.config
+          grep -q '^CONFIG_SERIAL_AMBA_PL011_CONSOLE=y$' out/.config
+          grep -q '^CONFIG_DEBUG_HI3620_UART=y$' out/.config
+          grep -q '^CONFIG_DRM=y$' out/.config
+          grep -q '^CONFIG_DRM_ETNAVIV=y$' out/.config
+          grep -q '^CONFIG_POWER_SUPPLY=y$' out/.config
+          grep -q '^CONFIG_BATTERY_BQ27XXX=y$' out/.config
+          grep -q '^CONFIG_BATTERY_BQ27XXX_I2C=y$' out/.config
+
+      - name: Build zImage and MediaPad DTB
+        run: |
+          make -j"$(nproc)" O=out zImage
+          if [[ "${GITHUB_REF_NAME}" == "pmos-hwbringup-20260909" ]]; then
+            make -j"$(nproc)" O=out hi3620-s10-101x-hwbringup.dtb
+          else
+            make -j"$(nproc)" O=out hi3620-s10-101x.dtb
+          fi
+
+      - name: Create appended-DTB kernel
+        run: |
+          mkdir -p artifacts
+          cp out/arch/arm/boot/zImage artifacts/zImage
+          if [[ "${GITHUB_REF_NAME}" == "pmos-hwbringup-20260909" ]]; then
+            cp out/arch/arm/boot/dts/hi3620-s10-101x-hwbringup.dtb artifacts/hi3620-s10-101x.dtb
+          else
+            cp out/arch/arm/boot/dts/hi3620-s10-101x.dtb artifacts/hi3620-s10-101x.dtb
+          fi
+          cat artifacts/zImage artifacts/hi3620-s10-101x.dtb > artifacts/zImage-dtb
+          cp out/.config artifacts/kernel.config
+          make -s O=out kernelrelease > artifacts/kernel.release
+          sha256sum artifacts/* | tee artifacts/SHA256SUMS
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mediapad-s10-hi3620-kernel-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create release archive
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version != '' }}
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euxo pipefail
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $RELEASE_VERSION" >&2
+            exit 2
+          fi
+          (cd artifacts && zip -9 -r ../kernel.zip .)
+          unzip -l kernel.zip
+          sha256sum kernel.zip
+
+      - name: Publish GitHub release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_version != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_version }}
+          target_commitish: ${{ github.sha }}
+          name: Linux Kernel for Huawei MediaPad 10 FHD ${{ inputs.release_version }}
+          generate_release_notes: true
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: kernel.zip
