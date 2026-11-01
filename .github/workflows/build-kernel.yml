@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: Hi3620-no-ai
 
       - name: Install ARM cross compiler
         run: |
