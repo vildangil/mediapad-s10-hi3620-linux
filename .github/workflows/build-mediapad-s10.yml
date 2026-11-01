@@ -8,11 +8,6 @@ on:
         required: false
         default: ''
         type: string
-  push:
-    branches:
-      - mediapad-s10-hi3620
-      - pmos-hwbringup-20260909
-      - pmos-dangerous-hw-experiments
     paths:
       - 'arch/arm/**'
       - 'drivers/**'
