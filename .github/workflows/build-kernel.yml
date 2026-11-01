@@ -8,17 +8,6 @@ on:
         required: false
         default: ''
         type: string
-    paths:
-      - 'arch/arm/**'
-      - 'drivers/**'
-      - 'include/**'
-      - 'kernel/**'
-      - 'init/**'
-      - 'mm/**'
-      - 'fs/**'
-      - 'scripts/**'
-      - 'Makefile'
-      - '.github/workflows/build-mediapad-s10.yml'
 
 permissions:
   contents: write
