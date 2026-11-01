@@ -1,0 +1,35 @@
+/*
+ * Huawei MediaPad 10 FHD S10-101x hardware bring-up overlay.
+ *
+ * Keep only hardware that is intentionally experimental here. Proven board
+ * devices live in hi3620-s10-101x.dts so the stable appended-DTB build keeps
+ * them without also exposing an incomplete DRM device to Xorg.
+ */
+
+#include "hi3620-s10-101x.dts"
+
+/ {
+	/*
+	 * Vivante GC4000 integrated in Hi3620/K3V2.
+	 *
+	 * This node is deliberately absent from the stable base DT. Current
+	 * Etnaviv probing reports GC0 revision 0 / unknown model and creates
+	 * /dev/dri/card0, which makes Xorg prefer modesetting over the working
+	 * bootloader simple-framebuffer.
+	 *
+	 * Power/clock/reset sequencing remains in hi3620-hwbringup.c while GPU
+	 * bring-up is investigated on an experimental branch.
+	 */
+	gpu: gpu@fa000000 {
+		compatible = "vivante,gc";
+		reg = <0xfa000000 0x00040000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 32 4>;
+		status = "okay";
+	};
+
+	gpu-subsystem {
+		compatible = "fsl,imx-gpu-subsystem";
+		cores = <&gpu>;
+	};
+};

@@ -1,0 +1,340 @@
+/*
+ * Huawei MediaPad 10 FHD S10-101x
+ *
+ * Initial Linux bring-up device tree for the HiSilicon Hi3620 (K3V2).
+ */
+
+/dts-v1/;
+
+#include "hi3620.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+
+/ {
+	model = "Huawei MediaPad 10 FHD S10-101x";
+	compatible = "huawei,s10-101x", "hisilicon,hi3620";
+
+	chosen {
+		bootargs = "console=ttyAMA0,115200n8 earlyprintk ignore_loglevel loglevel=8 root=/dev/ram0 rw";
+		stdout-path = "serial0:115200n8";
+	};
+
+	/* Proven on the S10: GPIO137/138 are the active-low volume keys. */
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		volume-up {
+			label = "Volume Up";
+			gpios = <&gpio17 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <20>;
+			wakeup-source;
+		};
+
+		volume-down {
+			label = "Volume Down";
+			gpios = <&gpio17 2 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEDOWN>;
+			debounce-interval = <20>;
+			wakeup-source;
+		};
+	};
+
+	framebuffer0: framebuffer@2f300000 {
+		compatible = "simple-framebuffer";
+		reg = <0x2f300000 0x008ca000>;
+		width = <1920>;
+		height = <1200>;
+		stride = <7680>;
+		format = "a8r8g8b8";
+		status = "okay";
+	};
+
+	usb_otg: usb@fd240000 {
+		compatible = "snps,dwc2";
+		reg = <0xfd240000 0x00040000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 52 4>;
+		clocks = <&clock HI3620_USB2DVC_CLK>;
+		clock-names = "otg";
+		dr_mode = "peripheral";
+		g-rx-fifo-size = <1024>;
+		g-np-tx-fifo-size = <512>;
+		g-tx-fifo-size = <256 256 256 256 256 256>;
+		status = "okay";
+	};
+
+	/*
+	 * BCM4330 WL_REG_ON is GPIO2. mmc-pwrseq-simple asserts it low while
+	 * powering the SDIO host, then releases it high and gives the chip the
+	 * same 200 ms settling time used by Huawei's vendor driver.
+	 */
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		reset-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+		pre-power-on-delay-ms = <100>;
+		post-power-on-delay-ms = <200>;
+	};
+
+	/*
+	 * BQ27510 fuel gauge on the physical K3V2 I2C0 bus. Huawei's vendor
+	 * clock table feeds DesignWare I2C from 48 MHz cfgaxi and IOMG45 uses
+	 * FUNC1 for GPIO84/85 (SCL/SDA).
+	 */
+	i2c0: i2c@fcb08000 {
+		compatible = "snps,designware-i2c";
+		reg = <0xfcb08000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 28 4>;
+		clocks = <&clock HI3620_I2CCLK0>;
+		clock-frequency = <100000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c0_pins &i2c0_cfg>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		battery@55 {
+			compatible = "ti,bq27510";
+			reg = <0x55>;
+		};
+	};
+
+	/* Alternate touchscreen controller/bus variant is not used on this tablet. */
+	i2c1: i2c@fcb09000 {
+		compatible = "snps,designware-i2c";
+		reg = <0xfcb09000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 29 4>;
+		clocks = <&clock HI3620_I2CCLK1>;
+		clock-frequency = <100000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	/*
+	 * Physical I2C2 DesignWare at 0xfcb0c000 is deliberately disabled for
+	 * this diagnostic boot. It accepts the Synaptics page-select bytes into
+	 * TX FIFO but never starts the transfer. The i2c-gpio adapter below uses
+	 * the exact same physical wires through GPIO63/GPIO64 instead.
+	 */
+	i2c2: i2c@fcb0c000 {
+		compatible = "snps,designware-i2c";
+		reg = <0xfcb0c000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 62 4>;
+		clocks = <&clock HI3620_I2CCLK2>;
+		clock-frequency = <100000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	/*
+	 * Diagnostic software I2C bus:
+	 *   SDA = GPIO64 = GPIO8_0
+	 *   SCL = GPIO63 = GPIO7_7
+	 *
+	 * Do not mark either GPIO as hardware-open-drain. Linux i2c-gpio will
+	 * emulate open drain safely by driving low and switching to input for high.
+	 * 5 us is the driver's normal ~100 kHz setting.
+	 */
+	touch_i2c_gpio: i2c-gpio {
+		compatible = "i2c-gpio";
+		gpios = <&gpio8 0 0>, <&gpio7 7 0>;
+		i2c-gpio,delay-us = <5>;
+		i2c-gpio,timeout-ms = <100>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c2_gpio_pins>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		touchscreen@70 {
+			compatible = "syna,rmi4-i2c";
+			reg = <0x70>;
+			interrupt-parent = <&gpio19>;
+			interrupts = <5 8>;
+			/* Match Huawei vendor RMI4's 100 ms wait before first access. */
+			syna,startup-delay-ms = <100>;
+		};
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x1ff00000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		boottrace@1ff00000 {
+			reg = <0x1ff00000 0x00001000>;
+		};
+
+		ramoops@1ff01000 {
+			compatible = "ramoops";
+			reg = <0x1ff01000 0x000ff000>;
+			record-size = <0x00040000>;
+			console-size = <0x00080000>;
+			unbuffered;
+		};
+	};
+
+	mmc_clock: mmc-clock@fc802000 {
+		compatible = "hisilicon,hi3620-mmc-clock";
+		reg = <0xfc802000 0x1000>;
+		#clock-cells = <1>;
+	};
+
+	sd_mmc: mmc@fcd03000 {
+		compatible = "hisilicon,hi4511-dw-mshc";
+		reg = <0xfcd03000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 16 4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		clocks = <&mmc_clock HI3620_SD_CIUCLK>,
+			 <&clock HI3620_DDRC_PER_CLK>;
+		clock-names = "ciu", "biu";
+		num-slots = <1>;
+		fifo-depth = <0x100>;
+		bus-width = <4>;
+		broken-cd;
+		disable-wp;
+		cap-sd-highspeed;
+		status = "okay";
+	};
+
+	emmc: mmc@fcd04000 {
+		compatible = "hisilicon,hi4511-dw-mshc";
+		reg = <0xfcd04000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 17 4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		clocks = <&mmc_clock HI3620_MMC_CIUCLK1>,
+			 <&clock HI3620_DDRC_PER_CLK>;
+		clock-names = "ciu", "biu";
+		num-slots = <1>;
+		fifo-depth = <0x100>;
+		bus-width = <8>;
+		non-removable;
+		disable-wp;
+		cap-mmc-highspeed;
+		status = "okay";
+	};
+
+	/*
+	 * Hi3620 MMC3 is SDIO1 on the S10 board. Huawei's schematics map
+	 * SDIO1_CLK/CMD/DATA0..3 to GPIO100..105 and connect this bus directly
+	 * to the BCM4330 Wi-Fi chip.
+	 */
+	wifi_sdio: mmc@fcd06000 {
+		compatible = "hisilicon,hi4511-dw-mshc";
+		reg = <0xfcd06000 0x1000>;
+		interrupt-parent = <&gic>;
+		interrupts = <0 19 4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		clocks = <&mmc_clock HI3620_MMC_CIUCLK3>,
+			 <&clock HI3620_DDRC_PER_CLK>;
+		clock-names = "ciu", "biu";
+		num-slots = <1>;
+		fifo-depth = <0x100>;
+		bus-width = <4>;
+		max-frequency = <50000000>;
+		non-removable;
+		cap-sdio-irq;
+		keep-power-in-suspend;
+		mmc-pwrseq = <&wifi_pwrseq>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sdio1_pins &sdio1_cfg>;
+		status = "okay";
+	};
+};
+
+&pmx0 {
+	/* Huawei K3V2 pin database: IOMG45 FUNC1 is I2C0 SCL/SDA. */
+	i2c0_pins: i2c0-pins {
+		pinctrl-single,pins = <0x0b4 0x1>;
+	};
+
+	/* IOMG26/IOMG27 function 1 routes the former I2C2 pads to PL061 GPIO. */
+	i2c2_gpio_pins: i2c2-gpio-pins {
+		pinctrl-single,pins = <
+			0x068 0x1
+			0x06c 0x1
+		>;
+	};
+
+	/* Huawei K3V2 iomux maps GPIO100..105 / SDIO1 to FUNC1. */
+	sdio1_pins: sdio1-pins {
+		pinctrl-single,pins = <
+			0x0cc 0x1	/* IOMG51: CLK/CMD/DATA0/DATA2/DATA3 */
+			0x0d0 0x1	/* IOMG52: DATA1 */
+		>;
+	};
+};
+
+&pmx1 {
+	/* IOCG103/104: vendor NORMAL mode for I2C0 is pulldown. */
+	i2c0_cfg: i2c0-cfg {
+		pinctrl-single,pins = <
+			0x17c 0
+			0x180 0
+		>;
+		pinctrl-single,bias-pulldown = <0x2 0x2 0x0 0x3>;
+	};
+
+	/* IOCG119..124: Huawei NORMAL mode is pulldown, drive LEVEL2. */
+	sdio1_cfg: sdio1-cfg {
+		pinctrl-single,pins = <
+			0x1bc 0
+			0x1c0 0
+			0x1c4 0
+			0x1c8 0
+			0x1cc 0
+			0x1d0 0
+		>;
+		pinctrl-single,bias-pulldown = <0x2 0x2 0x0 0x3>;
+		pinctrl-single,drive-strength = <0x30 0xf0>;
+	};
+};
+
+/*
+ * S10 schematic: GPIO6 drives the TPS61086 5 V boost enable. VREG_5V then
+ * feeds the dedicated 3.3 V converter for VDD_TP_3V3. Keep the boost enabled
+ * during bring-up so the Synaptics controller has both its 1.8 V I/O rail and
+ * the 3.3 V sensor/analog rail. The same boost also supplies USB/SPK on stock.
+ */
+&gpio0 {
+	tp_5v_enable_hog: tp-5v-enable-hog {
+		gpio-hog;
+		gpios = <6 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "tp-5v-enable";
+	};
+};
+
+&gpio19 {
+	/delete-property/ gpio-ranges;
+
+	touch_reset_hog: touch-reset-hog {
+		gpio-hog;
+		gpios = <4 0>;
+		output-high;
+		line-name = "touch-reset";
+	};
+};
+
+&dual_timer0 {
+	status = "okay";
+};
+
+&uart0 {
+	status = "okay";
+};
