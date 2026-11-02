@@ -76,14 +76,13 @@ jobs:
           grep -q '^CONFIG_CPU_V7=y$' out/.config
           grep -q '^CONFIG_CPU_32v7=y$' out/.config
           grep -q '^# CONFIG_SMP is not set$' out/.config
-          if grep -q '^CONFIG_SMP=y$' out/.config; then echo "SMP still enabled"; exit 2; fi
           grep -q '^CONFIG_ARM_APPENDED_DTB=y$' out/.config
           grep -q '^CONFIG_ARM_ATAG_DTB_COMPAT=y$' out/.config
           grep -q '^CONFIG_SERIAL_AMBA_PL011=y$' out/.config
           grep -q '^CONFIG_SERIAL_AMBA_PL011_CONSOLE=y$' out/.config
           grep -q '^CONFIG_DEBUG_HI3620_UART=y$' out/.config
-          grep -q '^CONFIG_DRM=y$' out/.config
-          grep -q '^CONFIG_DRM_ETNAVIV=y$' out/.config
+          grep -q '^# CONFIG_DRM is not set$' out/.config
+          grep -q '^# CONFIG_DRM_ETNAVIV is not set$' out/.config
           grep -q '^CONFIG_POWER_SUPPLY=y$' out/.config
           grep -q '^CONFIG_BATTERY_BQ27XXX=y$' out/.config
           grep -q '^CONFIG_BATTERY_BQ27XXX_I2C=y$' out/.config
