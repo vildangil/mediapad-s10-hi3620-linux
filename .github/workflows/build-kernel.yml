@@ -81,8 +81,8 @@ jobs:
           grep -q '^CONFIG_SERIAL_AMBA_PL011=y$' out/.config
           grep -q '^CONFIG_SERIAL_AMBA_PL011_CONSOLE=y$' out/.config
           grep -q '^CONFIG_DEBUG_HI3620_UART=y$' out/.config
-          grep -q '^# CONFIG_DRM is not set$' out/.config
-          grep -q '^# CONFIG_DRM_ETNAVIV is not set$' out/.config
+          grep -q '^CONFIG_DRM=y$' out/.config
+          grep -q '^CONFIG_DRM_ETNAVIV=y$' out/.config
           grep -q '^CONFIG_POWER_SUPPLY=y$' out/.config
           grep -q '^CONFIG_BATTERY_BQ27XXX=y$' out/.config
           grep -q '^CONFIG_BATTERY_BQ27XXX_I2C=y$' out/.config
