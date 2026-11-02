@@ -86,8 +86,8 @@ CONFIG_FONT_SUN12x22=y
 
 # Hi3620 integrates a Vivante GC4000. Etnaviv remains diagnostic/render-only
 # until the chip identifies correctly; Xorg is forced to fbdev in userspace.
-CONFIG_DRM=y
-CONFIG_DRM_ETNAVIV=y
+# CONFIG_DRM is not set
+# CONFIG_DRM_ETNAVIV is not set
 # CONFIG_DRM_ETNAVIV_REGISTER_LOGGING is not set
 
 CONFIG_MMC=y
@@ -127,7 +127,3 @@ CONFIG_DEBUG_KERNEL=y
 CONFIG_DEBUG_LL=y
 CONFIG_DEBUG_HI3620_UART=y
 CONFIG_EARLY_PRINTK=y
-
-CONFIG_POWER_SUPPLY=y
-CONFIG_BATTERY_BQ27XXX=y
-CONFIG_BATTERY_BQ27XXX_I2C=y
