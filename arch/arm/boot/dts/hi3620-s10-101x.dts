@@ -15,7 +15,7 @@
 	compatible = "huawei,s10-101x", "hisilicon,hi3620";
 
 	chosen {
-		bootargs = "console=ttyAMA0,115200n8 earlyprintk ignore_loglevel loglevel=8 root=/dev/ram0 rw";
+		bootargs = "bootargs = "console=ttyAMA0,115200n8 earlyprintk ignore_loglevel loglevel=8 root=/dev/ram0 rw clk_ignore_unused"";
 		stdout-path = "serial0:115200n8";
 	};
 
